@@ -91,7 +91,7 @@ endCliff <- function(m, inflection_rank, lowerRankForEndCliff, fit.bounds=NULL, 
     run.totals <- stuff$values
 
     lower <- lowerRankForEndCliff
-    if (totals[o][lower] < 100) { #if cellbender predicts plateau points too low, force to find end_cliff above point with UMIs=10, assuming anything with UMIs < 10 are empty barcodes - to avoid discreteness
+    if (totals[o][lower] < 100) { #if cellbender predicts plateau points too low, force to find end_cliff above point with UMIs=100, assuming anything with UMIs < 100 are empty barcodes - to avoid discreteness
            plateau <- 100
            keep <- run.totals > plateau
     } else if (totals[o][lower] > totals[o][inflection_rank]) {
