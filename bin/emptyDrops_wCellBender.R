@@ -1,13 +1,11 @@
-#!/usr/bin/env Rscript
-
 suppressPackageStartupMessages(library("DropletUtils"))
 library("optparse")
 
 option_list <- list(
-    make_option(c("--donor"), type = "character", help = "[Required] Library ID."),
-    make_option(c("--barcodeList"), type = "character", help = "Path to directory containing matrix.txt, features.tsv and barcodes.tsv files."),
-    make_option(c("--cbMetrics"), type = "character", help = "CellBender metrics file, often in the form *.cellbender_FPR_*_metrics.csv."),
-    make_option(c("--lowerForKnee"), type = "integer", help = "[Required] Lower cut-off, used for EmptyDrops."),
+    make_option(c("--donor"), type = "character", help = "[Required] Donor ID."),
+    make_option(c("--barcodeList"), type = "character", help = "Absolute path containng matrix.txt, features.tsv and barcodes.tsv files."),
+    make_option(c("--cbMetrics"), type = "character", help = "CellBender metrics file."),
+    #make_option(c("--lowerForKnee"), type = "integer", help = "[Required] Lower cut-off, used for EmptyDrops."),
     make_option(c("--outKnee"), type = "character", help = "File to save knee and inflection points."),
     make_option(c("--outPass"), type = "character", help = "File to save significant cells.")
 )
@@ -24,9 +22,7 @@ lowerForKnee <- opts$lowerForKnee
 lowerForKnee <- as.numeric(lowerForKnee)
 
 knee_inflection_rank <- function(m, lower=50, fit.bounds=NULL, exclude.from=50, df=20) {
-    #code adapted from https://github.com/MarioniLab/DropletUtils/blob/devel/R/barcodeRanks.R
     #m is a SummarizedExperiment containing such a matrix. (same as in EmptyDrops)
-    #lower is a numeric scalar specifying the lower bound on the total UMI count, at or below which all barcodes are assumed to correspond to empty droplets.
 
     totals <- unname(colSums(counts(m)))
     o <- order(totals, decreasing=TRUE)
@@ -86,11 +82,7 @@ knee_inflection_rank <- function(m, lower=50, fit.bounds=NULL, exclude.from=50, 
 }
 
 endCliff <- function(m, inflection_rank, lowerRankForEndCliff, fit.bounds=NULL, df=20) {
-    #lowerRankForEndCliff is max *rank* of the barcodes to include, and anything with higher *rank* is assumed to be empty droplets.
-    ##Should use *rank* of barcodes around plateau points that can be obtained from CellBender. Note that lowerRankForEndCliff is *barcode rank*, which is different from lowerForKnee.
-    
     #m is a SummarizedExperiment containing such a matrix. (same as in EmptyDrops)
-    
     totals <- unname(colSums(counts(m)))
     o <- order(totals, decreasing=TRUE)
 
@@ -99,7 +91,7 @@ endCliff <- function(m, inflection_rank, lowerRankForEndCliff, fit.bounds=NULL, 
     run.totals <- stuff$values
 
     lower <- lowerRankForEndCliff
-    if (totals[o][lower] < 100) { #if cellbender predicts plateau points too low, force to find end_cliff above point with UMIs=100, assuming anything with UMIs < 100 are empty barcodes - to avoid discreteness
+    if (totals[o][lower] < 100) { #if cellbender predicts plateau points too low, force to find end_cliff above point with UMIs=10, assuming anything with UMIs < 10 are empty barcodes - to avoid discreteness
            plateau <- 100
            keep <- run.totals > plateau
     } else if (totals[o][lower] > totals[o][inflection_rank]) {
@@ -118,7 +110,7 @@ endCliff <- function(m, inflection_rank, lowerRankForEndCliff, fit.bounds=NULL, 
     x <- log10(run.rank[keep])
 
     # Numerical differentiation to identify bounds for spline fitting.
-    edge.out <- find_curve_bounds(x=x, y=y, exclude.from=inflection_rank) #exclude.from=inflection_rank to use points from inflection to end
+    edge.out <- find_curve_bounds(x=x, y=y, exclude.from=inflection_rank)
     left.edge <- edge.out["left"]
     right.edge <- edge.out["right"]
 
@@ -134,7 +126,7 @@ endCliff <- function(m, inflection_rank, lowerRankForEndCliff, fit.bounds=NULL, 
 
         d1 <- predict(fit, deriv=1)$y
         d2 <- predict(fit, deriv=2)$y
-        curvature <- d2/(1 + d1^2)^1.5 #fit new curve from inflection to end
+        curvature <- d2/(1 + d1^2)^1.5 #fit new curve from knee to end
 
         end_cliff <- 10^(y[new.keep][which.max(curvature)])
         end_cliff_rank <- 10^(x[new.keep][which.max(curvature)])
@@ -162,17 +154,20 @@ find_curve_bounds <- function(x, y, exclude.from) { #taken from EmptyDrops
 }
 
 set.seed(1234)
+metrics <- read.csv(cbMetrics, header = F)
+colnames(metrics) <- c("metrics", "stats")
+lowerForEndCliff <- (metrics[metrics$metrics == "found_cells", "stats"] + metrics[metrics$metrics == "found_empties", "stats"])
+
 sce <- read10xCounts(inputDir)
+totals <- unname(colSums(counts(sce)))
+o <- order(totals, decreasing=TRUE)
+lowerForKnee <- totals[o][lowerForEndCliff]
 br.out <- barcodeRanks(sce, lower = lowerForKnee)
 tmp <- as.data.frame(metadata(br.out))
 
 ranks <- knee_inflection_rank(sce, lower = lowerForKnee) #get ranks of the knee and inflection points
 ranks <- as.data.frame(ranks)
 tmp <- cbind(tmp, ranks)
-
-metrics <- read.csv(cbMetrics, header = F)
-colnames(metrics) <- c("metrics", "stats")
-lowerForEndCliff <- (metrics[metrics$metrics == "found_cells", "stats"] + metrics[metrics$metrics == "found_empties", "stats"])
 
 end_cliff <- endCliff(sce, inflection_rank = tmp$inflection_rank, lowerRankForEndCliff=lowerForEndCliff)
 end_cliff <- as.data.frame(end_cliff)
@@ -182,6 +177,6 @@ write.table(tmp, outKnee, row.names = F, sep = "\t", quote = F)
 e.out <- emptyDrops(sce, lower = lowerForKnee)
 tmp <- as.data.frame(e.out)
 tmp$barcode <- sce$Barcode
-tmp <- tmp[!is.na(tmp$FDR) & tmp$FDR <= 0.005,] #maybe we should provide an argument to choose FDR threshold? In practice, I plot the adj. p-val distribution to choose a FDR threshold
+tmp <- tmp[!is.na(tmp$FDR) & tmp$FDR <= 0.005,]
 write.table(tmp, outPass, col.names = T, row.names = F, sep = "\t", quote = F)
 
