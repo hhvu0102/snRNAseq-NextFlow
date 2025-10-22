@@ -5,7 +5,6 @@ option_list <- list(
     make_option(c("--donor"), type = "character", help = "[Required] Donor ID."),
     make_option(c("--barcodeList"), type = "character", help = "Absolute path containng matrix.txt, features.tsv and barcodes.tsv files."),
     make_option(c("--cbMetrics"), type = "character", help = "CellBender metrics file."),
-    #make_option(c("--lowerForKnee"), type = "integer", help = "[Required] Lower cut-off, used for EmptyDrops."),
     make_option(c("--outKnee"), type = "character", help = "File to save knee and inflection points."),
     make_option(c("--outPass"), type = "character", help = "File to save significant cells.")
 )
@@ -18,8 +17,6 @@ inputDir <- opts$barcodeList
 cbMetrics <- opts$cbMetrics
 outKnee <- opts$outKnee
 outPass <- opts$outPass
-lowerForKnee <- opts$lowerForKnee
-lowerForKnee <- as.numeric(lowerForKnee)
 
 knee_inflection_rank <- function(m, lower=50, fit.bounds=NULL, exclude.from=50, df=20) {
     #m is a SummarizedExperiment containing such a matrix. (same as in EmptyDrops)
