@@ -161,14 +161,26 @@ o <- order(totals, decreasing=TRUE)
 lowerForKnee <- totals[o][lowerForEndCliff]
 br.out <- barcodeRanks(sce, lower = lowerForKnee)
 tmp <- as.data.frame(metadata(br.out))
-
 ranks <- knee_inflection_rank(sce, lower = lowerForKnee) #get ranks of the knee and inflection points
 ranks <- as.data.frame(ranks)
 tmp <- cbind(tmp, ranks)
-
 end_cliff <- endCliff(sce, inflection_rank = tmp$inflection_rank, lowerRankForEndCliff=lowerForEndCliff)
 end_cliff <- as.data.frame(end_cliff)
 tmp <- cbind(tmp, end_cliff)
+
+if (tmp$inflection < 300) { # in practice, good barcodes often have nUMIs > 300. If the inflection point is at below nUMI=300, either the data is low quality, or it has multiple knees. Here, we attempt to recall knee to see if it can detect better groups of nuclei/cells
+        print("Warning: inflection point is low (at nUMI < 300). Barcode rank plot possibly has multiple knees. Attempting to recall inflection point.")
+	lowerForKnee <- tmp$knee
+	lowerForEndCliff <- tmp$knee_rank
+	br.out <- barcodeRanks(sce, lower = lowerForKnee) #preclude barcodes with less than nUMI of the old knee so we can estimate a new function's 2rd order derivative
+        tmp <- as.data.frame(metadata(br.out))
+        ranks <- knee_inflection_rank(sce, lower = lowerForKnee) #get ranks of the knee and inflection points
+        ranks <- as.data.frame(ranks)
+        tmp <- cbind(tmp, ranks)	
+        end_cliff <- endCliff(sce, inflection_rank = tmp$inflection_rank, lowerRankForEndCliff=lowerForEndCliff)
+        end_cliff <- as.data.frame(end_cliff)
+        tmp <- cbind(tmp, end_cliff)
+}
 write.table(tmp, outKnee, row.names = F, sep = "\t", quote = F)
 
 e.out <- emptyDrops(sce, lower = lowerForKnee)
