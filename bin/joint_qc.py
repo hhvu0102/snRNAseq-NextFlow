@@ -53,8 +53,6 @@ GENE_FULL_EXON_OVER_INTRON_COUNTS = RNA_results_dir + 'starsolo/' + donor + '-hg
 GENE_COUNTS = RNA_results_dir + 'starsolo/' + donor + '-hg38/' + donor + '-hg38.Solo.out/Gene/raw'
 knee = args.knee #RNA_results_dir + 'emptyDrops/' + donor + '-hg38.knee.txt'
 passQC = RNA_results_dir + 'emptyDrops/' + donor + '-hg38.pass.txt'
-atac_sugg = pd.read_csv(ATAC_results_dir + 'ataqv/single-nucleus/' + donor + '-hg38.suggested-thresholds.tsv', sep = '\t')
-rna_sugg = pd.read_csv(RNA_results_dir + 'qc/' + donor + '-hg38.suggested-thresholds.tsv', sep = '\t')
 
 # ---upfront thresholds--- 
 THRESHOLD_CELLBENDER_MIN_CELL_PROBABILITY = 0.99
