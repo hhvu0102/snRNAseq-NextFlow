@@ -28,6 +28,7 @@ parser.add_argument("--RNA_results_dir", help="Path to RNA results directory.", 
 parser.add_argument("--ATAC_results_dir", help="Path to ATAC results directory.", type=str)
 parser.add_argument("--RNA_BARCODE_WHITELIST", help="Path to RNA barcode whitelist.", type=str)
 parser.add_argument("--ATAC_BARCODE_WHITELIST", help="Path to ATAC barcode whitelist.", type=str)
+parser.add_argument("--filter_MT_ATAC", help="Whether to filter ATAC nuclei based on %chrMT threshold. Default: False.", action='store_true', default=False)
 parser.add_argument("--qcPlot", help="Path to save qcPlot plots.", type=str)
 parser.add_argument("--upsetPlot", help="Path to save upset plots.", type=str)
 parser.add_argument("--outmetrics", help="Path to save all metrics results.", type=str)
@@ -287,8 +288,9 @@ THRESHOLD_ATAC_MIN_HQAA = round(thresholds[1])
 metrics['filter_atac_min_hqaa'] = metrics.atac_hqaa >= THRESHOLD_ATAC_MIN_HQAA
 
 ### get THRESHOLD_ATAC_MAX_MITO
-n_peaks, atac_kde_df = guess_n_classes(metrics, "ATAC")
-THRESHOLD_ATAC_MAX_MITO = get_chrMT_threshold_ATAC(metrics, n_peaks = n_peaks)
+if (args.filter_MT_ATAC == True):
+    n_peaks, atac_kde_df = guess_n_classes(metrics, "ATAC")
+    THRESHOLD_ATAC_MAX_MITO = get_chrMT_threshold_ATAC(metrics, n_peaks = n_peaks)
 
 
 
@@ -298,7 +300,8 @@ metrics['filter_rna_max_mito'] = metrics.rna_percent_mitochondrial <= THRESHOLD_
 metrics['filter_rna_exon_to_full_gene_body_ratio'] = metrics.rna_exon_to_full_gene_body_ratio <= THRESHOLD_EXON_GENE_BODY_RATIO
 metrics['filter_atac_min_hqaa'] = metrics.atac_hqaa >= THRESHOLD_ATAC_MIN_HQAA
 metrics['filter_atac_min_tss_enrichment'] = metrics.atac_tss_enrichment >= THRESHOLD_ATAC_MIN_TSS_ENRICHMENT
-metrics['filter_atac_max_mito'] = metrics.atac_percent_mitochondrial <= THRESHOLD_ATAC_MAX_MITO
+if (args.filter_MT_ATAC == True):
+    metrics['filter_atac_max_mito'] = metrics.atac_percent_mitochondrial <= THRESHOLD_ATAC_MAX_MITO
 metrics['pass_all_filters'] = metrics.filter(like='filter_').all(axis=1)
 
 # to collect all Thresholds here
@@ -391,7 +394,8 @@ ax.axhline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
 ax = axs[2, 3]
 atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, alpha=0.02)
 ax.axvline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
-ax.axhline(THRESHOLD_ATAC_MAX_MITO, color='green', ls='--', label='THRESHOLD_ATAC_MAX_MITO = {:,}'.format(THRESHOLD_ATAC_MAX_MITO))
+if (args.filter_MT_ATAC == True):
+    ax.axhline(THRESHOLD_ATAC_MAX_MITO, color='green', ls='--', label='THRESHOLD_ATAC_MAX_MITO = {:,}'.format(THRESHOLD_ATAC_MAX_MITO))
 ax.legend()
 
 #ax = axs[3,0]
