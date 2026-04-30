@@ -24,8 +24,6 @@ from helper_joint_qc import *
 
 parser = argparse.ArgumentParser("Plot QC metrics per sample")
 parser.add_argument("--sample", help="Donor ID.", type=str)
-parser.add_argument("--knee", help="Knee file.", type=str)
-parser.add_argument("--passEd", help="Pass EmptyDrops file.", type=str)
 parser.add_argument("--RNA_results_dir", help="Path to RNA results directory.", type=str)
 parser.add_argument("--qcPlot", help="Path to save qcPlot plots.", type=str)
 parser.add_argument("--upsetPlot", help="Path to save upset plots.", type=str)
@@ -45,8 +43,8 @@ CELLBENDER = RNA_results_dir+'cellbender/cellbender_default/'+donor+'-hg38.cellb
 RNA_METRICS = RNA_results_dir+'qc/'+donor+'-hg38.qc.txt'
 GENE_FULL_EXON_OVER_INTRON_COUNTS = RNA_results_dir + 'starsolo/' + donor + '-hg38/' + donor + '-hg38.Solo.out/GeneFull_ExonOverIntron/raw'
 GENE_COUNTS = RNA_results_dir + 'starsolo/' + donor + '-hg38/' + donor + '-hg38.Solo.out/Gene/raw'
-knee = args.knee #RNA_results_dir + 'emptyDrops/' + donor + '-hg38.knee.txt'
-passQC = args.passEd #RNA_results_dir + 'emptyDrops/' + donor + '-hg38.pass.txt'
+knee = RNA_results_dir + 'emptyDrops/' + donor + '-hg38.knee.txt'
+passQC = RNA_results_dir + 'emptyDrops/' + donor + '-hg38.pass.txt'
 
 # ---upfront thresholds--- 
 THRESHOLD_CELLBENDER_MIN_CELL_PROBABILITY = 0.99
