@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
+
 import sys
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,6 +27,9 @@ import argparse
 
 from helper_joint_qc import *
 
+from logging_config import setup_logging
+import logging
+
 parser = argparse.ArgumentParser("Plot QC metrics per sample")
 parser.add_argument("--sample", help="Donor ID.", type=str)
 parser.add_argument("--RNA_results_dir", help="Path to RNA results directory.", type=str)
@@ -32,16 +40,22 @@ parser.add_argument("--filter_MT_ATAC", help="Whether to filter ATAC nuclei base
 parser.add_argument("--qcPlot", help="Path to save qcPlot plots.", type=str)
 parser.add_argument("--upsetPlot", help="Path to save upset plots.", type=str)
 parser.add_argument("--outmetrics", help="Path to save all metrics results.", type=str)
+parser.add_argument("--outlogs", help="Path to save log messages.", type=str)
 
 
 args = parser.parse_args()
 
+# save logs
+setup_logging(log_file=args.outlogs, level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 # ---inputs---
 donor = args.sample
-print(donor)
+logger.info(f"Sample name: {donor}")
 RNA_results_dir = str(args.RNA_results_dir)
-print(RNA_results_dir)
+logger.info(f"Input dir for RNA: {RNA_results_dir}")
 ATAC_results_dir = args.ATAC_results_dir
+logger.info(f"Input dir for ATAC: {ATAC_results_dir}")
 RNA_BARCODE_WHITELIST = args.RNA_BARCODE_WHITELIST
 ATAC_BARCODE_WHITELIST = args.ATAC_BARCODE_WHITELIST
 
@@ -113,7 +127,7 @@ with open(KNEE_FILE, 'r') as file:
         inflection = round(float(row[1]))
         inflection_rank = round(float(row[2]))
         knee_rank = round(float(row[3]))
-        endCliff = round(float(row[4]))
+        end_cliff = round(float(row[4]))
         end_cliff_rank = round(float(row[5]))
         plateau = round(float(row[6]))
 
@@ -259,15 +273,25 @@ def log_thresholds(thresholds):
 
     logger.info("\n".join(lines))
 
-thresholds = {
-    "rna_min_umi": THRESHOLD_RNA_MIN_UMI,
-    "fraction_cb_removed": THRESHOLD_FRACTION_CB_REMOVED,
-    "rna_max_mito": THRESHOLD_RNA_MAX_MITO,
-    "exon_gene_body_ratio": THRESHOLD_EXON_GENE_BODY_RATIO,
-    "atac_min_hqaa": THRESHOLD_ATAC_MIN_HQAA,
-    "atac_min_tss_enrichment": THRESHOLD_ATAC_MIN_TSS_ENRICHMENT,
-    "atac_max_mito": THRESHOLD_ATAC_MAX_MITO,
-}
+if (args.filter_MT_ATAC == True):
+    thresholds = {
+        "rna_min_umi": THRESHOLD_RNA_MIN_UMI,
+        "fraction_cb_removed": THRESHOLD_FRACTION_CB_REMOVED,
+        "rna_max_mito": THRESHOLD_RNA_MAX_MITO,
+        "exon_gene_body_ratio": THRESHOLD_EXON_GENE_BODY_RATIO,
+        "atac_min_hqaa": THRESHOLD_ATAC_MIN_HQAA,
+        "atac_min_tss_enrichment": THRESHOLD_ATAC_MIN_TSS_ENRICHMENT,
+        "atac_max_mito": THRESHOLD_ATAC_MAX_MITO,
+        }
+else:
+    thresholds = {
+        "rna_min_umi": THRESHOLD_RNA_MIN_UMI,
+        "fraction_cb_removed": THRESHOLD_FRACTION_CB_REMOVED,
+        "rna_max_mito": THRESHOLD_RNA_MAX_MITO,
+        "exon_gene_body_ratio": THRESHOLD_EXON_GENE_BODY_RATIO,
+        "atac_min_hqaa": THRESHOLD_ATAC_MIN_HQAA,
+        "atac_min_tss_enrichment": THRESHOLD_ATAC_MIN_TSS_ENRICHMENT
+        }
 
 log_thresholds(thresholds)
 
@@ -279,13 +303,13 @@ pass_qc_nuclei = list(sorted(metrics[metrics.pass_all_filters].barcode.to_list()
 
 
 # Plot QC metrics #to work on plotting
-fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(3*4, 3*4))
+fig, axs = plt.subplots(nrows=3, ncols=3, figsize=(3*4, 3*4))
 
 ax = axs[0, 0]
 barcode_rank_plot(metrics, ax)
 ax.axhline(knee, color='red', ls='--', label='knee={:,}'.format(knee))
 ax.axhline(inflection, color='green', ls='--', label='inflection={:,}'.format(inflection))
-ax.axhline(endCliff, color='blue', ls='--', label='end_cliff={:,}'.format(endCliff))
+ax.axhline(end_cliff, color='blue', ls='--', label='end_cliff={:,}'.format(end_cliff))
 ax.axhline(plateau, color='orange', ls='--', label='plateau={:,}'.format(plateau))
 ax.set_title('Inferred n knees = {:,}'.format(n_peaks_knee_plot)) 
 ax.legend()

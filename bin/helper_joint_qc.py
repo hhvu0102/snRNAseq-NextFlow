@@ -17,6 +17,9 @@ import upsetplot
 from scipy.io import mmread
 import csv
 import logging
+from scipy.interpolate import interp1d
+from scipy.signal import find_peaks, savgol_filter
+
 
 #### FUNCTIONS FROM CELLBENDER
 def dict_from_h5(file: str) -> Dict[str, np.ndarray]:
@@ -294,7 +297,7 @@ def guess_n_classes(metrics, mode = 'RNA'):
 
 ### get THRESHOLD_RNA_MAX_MITO and THRESHOLD_ATAC_MAX_MITO
 ### get THRESHOLD_RNA_MAX_MITO
-def thresholds_on_2d_matrix(x, y, bins=150, n_classes = 4, chosen_c = 1): # Create a 2D array representation
+def thresholds_on_2d_matrix(x, y, bins=150, n_classes = 4, chosen_class = 1): # Create a 2D array representation
     """
     Estimate thresholds from a 2D histogram using Multi-Otsu segmentation.
 
@@ -564,7 +567,7 @@ def get_cellbender_thresholds(metrics, peaks_cb, n_peaks_cb, cb_kde_df):
           counts removed by CellBender
         - threshold_post_cb_umis : float, minimum UMI count after CellBender
     """
-    logger.info(f"Number of classes in %% ambient CellBender removed: {n_peaks:,}")
+    logger.info(f"Number of classes in %% ambient CellBender removed: {n_peaks_cb:,}")
     if n_peaks_cb == 1:
         x = np.log10(metrics[(metrics.pct_cellbender_removed > 5) &
                              (metrics.pct_cellbender_removed < 50) &
@@ -572,7 +575,7 @@ def get_cellbender_thresholds(metrics, peaks_cb, n_peaks_cb, cb_kde_df):
         y = metrics[(metrics.pct_cellbender_removed > 5) &
                     (metrics.pct_cellbender_removed < 50) &
                     (np.isnan(metrics.pct_cellbender_removed) == False)].fraction_cellbender_removed
-        min_x_coordinate, max_y_coordinate = thresholds_on_2d_matrix(x, y, chosen_c=0)
+        min_x_coordinate, max_y_coordinate = thresholds_on_2d_matrix(x, y, chosen_class=0)
         THRESHOLD_FRACTION_CB_REMOVED = round(max_y_coordinate, 2)
         THRESHOLD_POST_CB_UMIS = round(pow(10, min_x_coordinate))
 
