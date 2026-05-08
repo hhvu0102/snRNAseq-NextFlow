@@ -165,95 +165,10 @@ THRESHOLD_RNA_MAX_MITO = get_chrMT_threshold_RNA(metrics, n_peaks = n_peaks)
 ##############################
 
 ####### knee plot analysis
-def get_color(umis): #to plot the intervals
-    if umis < endCliff:
-        return 'UMIs < ' + str(endCliff)
-    elif endCliff <= umis < knee:
-        return str(endCliff) + ' < UMIs < ' + str(knee)
-    else:
-        return 'UMIs > ' + str(knee)
-
-df = metrics.sort_values('rna_umis', ascending=False)
-df['barcode_rank'] = range(1, len(df) + 1)
-df = df[df.rna_umis > 0] #to avoid taking log10(0)
-df['range'] = df['rna_umis'].apply(get_color)
-
-#using diff() to calculate the n-th order discrete difference between two consecutive data points
-change = np.diff(np.log10(df.rna_umis).values) # / np.diff(np.log10(df.barcode_rank).values)
-change = np.append([0], change)
-df['change_umis'] = abs(change)
-
-#interpolate to sample from data on a log scale and obtain data points that are equally spaced. This step is important to do smoothing (savgol_filter) later,
 from scipy.interpolate import interp1d
-f = interp1d(x = np.log10(df.barcode_rank), y = np.log10(df.rna_umis))
-reg_t = np.linspace(start=np.log10(min(df.barcode_rank)), stop=np.log10(max(df.barcode_rank)), num=int(len(df.barcode_rank)*2))
-reg = f(reg_t)
-df2 = pd.DataFrame(columns=['x_new', 'y_new'])
-df2['x_new'] = 10**reg_t
-df2['y_new'] = 10**reg
-df2['range'] = df2['y_new'].apply(get_color)
+from scipy.signal import find_peaks, savgol_filter
 
-#do savgol_filter, which essentially smooths out the data and helps to focus on the slopes (degree of change) only
-from scipy.signal import savgol_filter
-if inflection_rank >= knee_rank:
-    filtered_df = df2[(df2['x_new'] >= knee_rank) & (df2['x_new'] <= inflection_rank)]
-    w = filtered_df.shape[0] # Count how many interpolated points fall into [knee_rank, inflection_rank]
-else:
-    filtered_df = df2[(df2['x_new'] >= inflection_rank) & (df2['x_new'] <= knee_rank)] ## technically inflection_rank should always be higehr than knee_rank, but inflection in emptyDrops does not have smoothing so it's very unstable and one rank (i.e., x) can lead to multiple inflection point (but y, i.e. the UMI number, is still the same). In case inflection_rank is < knee_rank, force the higher point to be inflection_rank
-    w = filtered_df.shape[0] # Count how many interpolated points fall into [knee_rank, inflection_rank]
-
-w = round(w/5)
-if w % 2 == 0:
-    w += 1
-
-w = max(w, 201) #if w is too small, it does not filter enough noise, hence force it to be 201 when w is too small as is
-
-print("window size:")
-print(w)
-
-yhat = savgol_filter(x = np.log10(df2.y_new).values, window_length = w, polyorder = 1)
-yhat_change = np.diff(yhat) 
-yhat_change = np.append([0], yhat_change)
-df2['change'] = yhat_change # using yhat_change instead of abs(yhat_change) to keep direction of changes
-
-# make knee plot warning:
-from scipy.signal import find_peaks
-
-window_length = round(w*2)
-if window_length % 2 == 0:
-    window_length += 1
-
-df_peak = pd.DataFrame(columns=['x_new', 'y_new', 'change'])
-df_peak = df2
-yhat = savgol_filter(x = df_peak.change, window_length = window_length, polyorder = 1) #has to smooth it out first
-df_peak['change_hat'] = yhat
-
-x = abs(df_peak[df_peak.y_new > 5].change_hat)
-peaks, _ = find_peaks(x, prominence=abs(min(df_peak.change_hat) * 0.1))
-n_knee = len(peaks)
-
-if n_knee > 1 and (df_peak.x_new[peaks] > end_cliff_rank).sum() > 1:
-    # the changes at the tail end of the knee plot can get unstable, so it has multiple peaks at times
-    # in that case, keep the highest peak
-    rhs_peaks = peaks[df_peak.x_new[peaks] > end_cliff_rank]
-    rhs_kept_peak = df_peak.change_hat[rhs_peaks].idxmin()
-    final_peaks = np.append(peaks[df_peak.x_new[peaks] < end_cliff_rank], rhs_kept_peak)
-else:
-    final_peaks = peaks
-
-n_knee = len(final_peaks)
-
-if n_knee == 1 and (df_peak.x_new[peaks] > end_cliff_rank).all():
-    print("Warning: Knee plot does not show clear knee points")
-elif n_knee == 0:
-    print("Error: Could not detect peaks of change? Check data")
-elif n_knee > 2:
-    print("Warning: Knee plot may have multiple knees")
-#elif (df_peak.x_new[peaks] < knee_rank).any():
-#    print("Warning: There may be multiple knees in the plot")
-
-print('Number of prominent cliff in knee plot analysis is {:,}'.format(n_knee))
-##############################
+df_ranked, df_interpolated, n_peaks_knee_plot, final_peak_indices = analyze_knee_plot(metrics, knee, knee_rank, end_cliff, end_cliff_rank, inflection_rank)
 ##############################
 
 ### ATAC side ###
@@ -305,13 +220,56 @@ if (args.filter_MT_ATAC == True):
 metrics['pass_all_filters'] = metrics.filter(like='filter_').all(axis=1)
 
 # to collect all Thresholds here
-print("THRESHOLD_RNA_MIN_UMI = {:,}".format(THRESHOLD_RNA_MIN_UMI))
-print("THRESHOLD_FRACTION_CB_REMOVED = {:,}".format(THRESHOLD_FRACTION_CB_REMOVED))
-print("THRESHOLD_RNA_MAX_MITO = {:,}".format(THRESHOLD_RNA_MAX_MITO))
-print("THRESHOLD_EXON_GENE_BODY_RATIO = {:,}".format(THRESHOLD_EXON_GENE_BODY_RATIO))
-print("THRESHOLD_ATAC_MIN_HQAA = {:,}".format(THRESHOLD_ATAC_MIN_HQAA))
-print("THRESHOLD_ATAC_MIN_TSS_ENRICHMENT = {:,}".format(THRESHOLD_ATAC_MIN_TSS_ENRICHMENT))
-print("THRESHOLD_ATAC_MAX_MITO = {:,}".format(THRESHOLD_ATAC_MAX_MITO))
+def log_thresholds(thresholds):
+    """
+    Log all computed QC thresholds in a clearly formatted summary.
+
+    Parameters
+    ----------
+    thresholds : dict
+        Dictionary mapping threshold names to their computed values.
+        Expected keys:
+        - rna_min_umi
+        - fraction_cb_removed
+        - rna_max_mito
+        - exon_gene_body_ratio
+        - atac_min_hqaa
+        - atac_min_tss_enrichment
+        - atac_max_mito
+    """
+    header = "Computed QC Thresholds"
+    separator = "=" * 50
+
+    lines = [
+        "",
+        separator,
+        f"  {header}",
+        separator,
+    ]
+
+    for name, value in thresholds.items():
+        formatted_name = name.upper()
+        if isinstance(value, float):
+            lines.append(f"  {formatted_name:<30} = {value:,.2f}")
+        else:
+            lines.append(f"  {formatted_name:<30} = {value:,}")
+
+    lines.append(separator)
+    lines.append("")
+
+    logger.info("\n".join(lines))
+
+thresholds = {
+    "rna_min_umi": THRESHOLD_RNA_MIN_UMI,
+    "fraction_cb_removed": THRESHOLD_FRACTION_CB_REMOVED,
+    "rna_max_mito": THRESHOLD_RNA_MAX_MITO,
+    "exon_gene_body_ratio": THRESHOLD_EXON_GENE_BODY_RATIO,
+    "atac_min_hqaa": THRESHOLD_ATAC_MIN_HQAA,
+    "atac_min_tss_enrichment": THRESHOLD_ATAC_MIN_TSS_ENRICHMENT,
+    "atac_max_mito": THRESHOLD_ATAC_MAX_MITO,
+}
+
+log_thresholds(thresholds)
 
 
 ##########
@@ -321,7 +279,7 @@ pass_qc_nuclei = list(sorted(metrics[metrics.pass_all_filters].barcode.to_list()
 
 
 # Plot QC metrics #to work on plotting
-fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(4*4, 3*4))
+fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(3*4, 3*4))
 
 ax = axs[0, 0]
 barcode_rank_plot(metrics, ax)
@@ -329,6 +287,7 @@ ax.axhline(knee, color='red', ls='--', label='knee={:,}'.format(knee))
 ax.axhline(inflection, color='green', ls='--', label='inflection={:,}'.format(inflection))
 ax.axhline(endCliff, color='blue', ls='--', label='end_cliff={:,}'.format(endCliff))
 ax.axhline(plateau, color='orange', ls='--', label='plateau={:,}'.format(plateau))
+ax.set_title('Inferred n knees = {:,}'.format(n_peaks_knee_plot)) 
 ax.legend()
 
 ax = axs[0, 1]
@@ -341,7 +300,7 @@ ax = axs[0, 2]
 cellbender_fraction_removed(metrics, ax)
 ax.axhline(THRESHOLD_FRACTION_CB_REMOVED, color='blue', ls='--')
 
-ax = axs[0, 3]
+ax = axs[1, 0]
 sns.histplot(x='pct_cellbender_removed', data=metrics[(metrics.pct_cellbender_removed > 5) &
                                                       (metrics.pct_cellbender_removed < 50) &
                                                       (np.isnan(metrics.pct_cellbender_removed) == False)], ax=ax)
@@ -349,27 +308,10 @@ ax.axvline(THRESHOLD_FRACTION_CB_REMOVED*100, color='blue', ls='--', label='%amb
 ax.legend()
 ax.set_xlabel('5% < % ambient removed < 50%')
 
-ax = axs[1, 0]
+ax = axs[1, 1]
 cellbender_cell_probabilities(metrics, ax)
 
-ax = axs[1, 1]
-sns.scatterplot(x='barcode_rank', y='rna_umis', data=df[(df.barcode!='-') & (df.rna_umis > 5)], ax=ax, edgecolor=None, alpha=0.5, s=2, hue='range')
-ax.axhline(endCliff, color='blue', ls='--', label='end_cliff = {:,}'.format(endCliff))
-ax.axhline(knee, color='red', ls='--', label='knee = {:,}'.format(knee))
-ax.axhline(inflection, color='green', ls='--', label='inflection = {:,}'.format(inflection))
-ax.set_xscale('log')
-ax.set_yscale('log')
-ax.set_xlabel('barcode rank')
-ax.set_ylabel('UMIs > 5')
-
 ax = axs[1, 2]
-sns.scatterplot(x='x_new', y='change_hat', data=df_peak[df_peak.y_new > 5], ax=ax, edgecolor=None, alpha=0.5, s=3, hue='range')
-ax.scatter(x=df_peak.x_new[final_peaks], y=df_peak.change_hat[final_peaks], color='red', s=10, zorder=5)  # Red dots
-ax.set_xscale('log')
-ax.set_xlabel('rank of barcodes with UMIs > 5')
-ax.set_ylabel('Discrete diff. after smooth')
-
-ax = axs[1, 3]
 rna_umis_vs_exon_to_full_gene_body_ratio(metrics, ax)
 ax.axhline(THRESHOLD_EXON_GENE_BODY_RATIO, color='red', ls='--', label='exon/full ratio. Multi-otsu = {:,}'.format(round(THRESHOLD_EXON_GENE_BODY_RATIO, 2)))
 ax.legend()
@@ -388,19 +330,16 @@ ax.axhline(THRESHOLD_ATAC_MIN_TSS_ENRICHMENT, color='red', ls='--')
 ax.legend()
 
 ax = axs[2, 2]
-barcode_rank_plot_atac(metrics, ax, alpha=0.02)
-ax.axhline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
+#barcode_rank_plot_atac(metrics, ax, alpha=0.02)
+#ax.axhline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
 
-ax = axs[2, 3]
+#ax = axs[2, 3]
 atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, alpha=0.02)
 ax.axvline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
 if (args.filter_MT_ATAC == True):
     ax.axhline(THRESHOLD_ATAC_MAX_MITO, color='green', ls='--', label='THRESHOLD_ATAC_MAX_MITO = {:,}'.format(THRESHOLD_ATAC_MAX_MITO))
 ax.legend()
 
-#ax = axs[3,0]
-#atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, alpha=0.02)
-#ax.axvline(THRESHOLD_ATAC_MIN_TSS_ENRICHMENT, color='red', ls='--')
 
 fig.suptitle('{:,} pass QC nuclei'.format(len(pass_qc_nuclei)) + " " + donor)
 fig.tight_layout()
