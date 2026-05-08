@@ -5,6 +5,7 @@ option_list <- list(
     make_option(c("--donor"), type = "character", help = "[Required] Donor ID."),
     make_option(c("--barcodeList"), type = "character", help = "Absolute path containng matrix.txt, features.tsv and barcodes.tsv files."),
     make_option(c("--cbMetrics"), type = "character", help = "CellBender metrics file."),
+    make_option(c("--fdr"), type = "numeric", help = "FDR threshold."),
     make_option(c("--outKnee"), type = "character", help = "File to save knee and inflection points."),
     make_option(c("--outPass"), type = "character", help = "File to save significant cells.")
 )
@@ -17,6 +18,7 @@ inputDir <- opts$barcodeList
 cbMetrics <- opts$cbMetrics
 outKnee <- opts$outKnee
 outPass <- opts$outPass
+fdr <- as.numeric(opts$fdr)
 
 knee_inflection_rank <- function(m, lower=50, fit.bounds=NULL, exclude.from=50, df=20) {
     #m is a SummarizedExperiment containing such a matrix. (same as in EmptyDrops)
@@ -186,6 +188,6 @@ write.table(tmp, outKnee, row.names = F, sep = "\t", quote = F)
 e.out <- emptyDrops(sce, lower = lowerForKnee)
 tmp <- as.data.frame(e.out)
 tmp$barcode <- sce$Barcode
-tmp <- tmp[!is.na(tmp$FDR) & tmp$FDR <= 0.005,]
+tmp <- tmp[!is.na(tmp$FDR) & tmp$FDR <= fdr,]
 write.table(tmp, outPass, col.names = T, row.names = F, sep = "\t", quote = F)
 

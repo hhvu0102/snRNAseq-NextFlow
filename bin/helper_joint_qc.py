@@ -16,6 +16,7 @@ import os
 import upsetplot
 from scipy.io import mmread
 import csv
+import logging
 
 #### FUNCTIONS FROM CELLBENDER
 def dict_from_h5(file: str) -> Dict[str, np.ndarray]:
