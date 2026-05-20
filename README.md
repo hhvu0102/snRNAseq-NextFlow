@@ -35,6 +35,7 @@ nextflow run -resume -params-file library-config.json --barcode-whitelist /path/
 
 # QC scripts
 *Previously, the QC scripts are stored separately from this pipeline. I (Ha) am now working on auto-thresholding for all data modality, so I'm committing a lot of QC scripts in this same Github. Eventually these scripts will be reorganized.*
+
 Under `bin/`, there should be the following scripts for QC thresholding:
 1. `atac_module_qc.py`: QC script for when you have only snATAC-seq data
 * Example command:
@@ -60,5 +61,23 @@ python3 rna_module_qc.py --sample "HPAP-079" --assay_res nuclei --RNA_results_di
 - outmetrics is a text file with per-barcode QC metrics
 - outlog is a text file recording logs and thresholds as calculated by the implemented algorithms
 
-3. `joint_qc.py` 
-emptyDrops_wCellBender.R  helper_joint_qc.py  interactive-barcode-rank-plot.py  joint_qc.py  logging_config.py  plot-qc-metrics.py  __pycache__  qc-from-starsolo.py  rna_module_qc.py  rna_qc.py  rna_qc_test.py
+3. `joint_qc.py`: QC script for when you have multiomes data
+* Example command:
+```bash
+cd /path/to/snRNAseq-NextFlow/bin # go to where the scripts are stored so helper functions can be imported correctly
+python3 joint_qc.py --sample "HPAP-160" --RNA_results_dir "/path/to/RNA/" --ATAC_results_dir "/path/to/ATAC/" --RNA_BARCODE_WHITELIST "/path/to/snRNAseq-NextFlow/737K-arc-v1.txt" --ATAC_BARCODE_WHITELIST "/path/to/snATACseq-NextFlow/737K-arc-v1.txt" --filter_MT_ATAC "False" --qcPlot "/path/to/HPAP-160.qcPlots.png" --upsetPlot "/path/to/HPAP-160.upsetPlot.png" --outmetrics "/path/to/HPAP-160.outmetrics.csv" --outlogs "/path/to/HPAP-160.log"
+```
+*PLEASE NOTE* that `--RNA_BARCODE_WHITELIST` and `--ATAC_BARCODE_WHITELIST` are two *different* files. The RNA whitelist can be downloaded from https://github.com/porchard/snRNAseq-NextFlow and the ATAC whitelist can be downloaded from https://github.com/porchard/snATACseq-NextFlow
+* Outputs:
+- qcPlot contains multiple plots with different combination of QC metrics
+- upsetPlot shows n nuclei satisfying different QC thresholds
+- outmetrics is a text file with per-barcode QC metrics
+- outlog is a text file recording logs and thresholds as calculated by the implemented algorithms
+
+4. Other scripts:
+* `emptyDrops_wCellBender.R`: emptydrop script
+* `helper_joint_qc.py`: helper function to do all QC listed above
+* `interactive-barcode-rank-plot.py`: script to generate an interactive barcode rank plot
+* `logging_config.py`: log function to record all QC messages
+* `plot-qc-metrics.py`: script for preliminary QC plots
+* `qc-from-starsolo.py`: script to incoporate starsolo metrics to qc

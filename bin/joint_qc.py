@@ -30,13 +30,23 @@ from helper_joint_qc import *
 from logging_config import setup_logging
 import logging
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 parser = argparse.ArgumentParser("Plot QC metrics per sample")
 parser.add_argument("--sample", help="Sample ID.", type=str)
 parser.add_argument("--RNA_results_dir", help="Path to RNA results directory.", type=str)
 parser.add_argument("--ATAC_results_dir", help="Path to ATAC results directory.", type=str)
 parser.add_argument("--RNA_BARCODE_WHITELIST", help="Path to RNA barcode whitelist.", type=str)
 parser.add_argument("--ATAC_BARCODE_WHITELIST", help="Path to ATAC barcode whitelist.", type=str)
-parser.add_argument("--filter_MT_ATAC", help="Whether to filter ATAC nuclei based on %chrMT threshold. Default: False.", action='store_true', default=False)
+parser.add_argument("--filter_MT_ATAC", help="Whether to filter ATAC nuclei based on %chrMT threshold. Default: False.", type=str2bool, default=False)
 parser.add_argument("--qcPlot", help="Path to save qcPlot plots.", type=str)
 parser.add_argument("--upsetPlot", help="Path to save upset plots.", type=str)
 parser.add_argument("--outmetrics", help="Path to save all metrics results.", type=str)
