@@ -491,9 +491,9 @@ def get_chrMT_threshold_ATAC(metrics, n_peaks):
         max_y_coordinate = np.log10(max_y_coordinate)
         THRESHOLD_ATAC_MAX_MITO = round(pow(10, max_y_coordinate), 2)
 
-    if THRESHOLD_ATAC_MAX_MITO < 5:
-        logger.info("THRESHOLD_ATAC_MAX_MITO guessed as < 5, set it to be 5%%.")
-        THRESHOLD_ATAC_MAX_MITO = 5 #if THRESHOLD_ATAC_MAX_MITO is very low, set it to be 5
+    if THRESHOLD_ATAC_MAX_MITO < 10:
+        logger.info("THRESHOLD_ATAC_MAX_MITO guessed as < 10, set it to be 10%%.")
+        THRESHOLD_ATAC_MAX_MITO = 10 #if THRESHOLD_ATAC_MAX_MITO is very low, set it to be 10
 
     return THRESHOLD_ATAC_MAX_MITO
 
@@ -1076,7 +1076,7 @@ def get_atac_max_autosome_threshold(metrics):
     Parameters
     ----------
     metrics : pd.DataFrame
-        QC metrics DataFrame. Must contain 'max_fraction_reads_from_single_autosome',
+        QC metrics DataFrame. Must contain 'atac_max_fraction_reads_from_single_autosome',
         'filter_atac_min_hqaa', and 'hqaa' (for the 2D method).
 
     Returns
@@ -1089,8 +1089,8 @@ def get_atac_max_autosome_threshold(metrics):
     """
     # Convert fraction to percentage
     metrics = metrics.copy()
-    metrics["max_pct_reads_from_single_autosome"] = (
-        metrics["max_fraction_reads_from_single_autosome"] * _FRACTION_TO_PCT
+    metrics["atac_max_pct_reads_from_single_autosome"] = (
+        metrics["atac_max_fraction_reads_from_single_autosome"] * _FRACTION_TO_PCT
     )
 
     # Step 1: Detect number of peaks in the distribution
@@ -1101,6 +1101,10 @@ def get_atac_max_autosome_threshold(metrics):
         threshold = _threshold_single_peak(metrics, n_peaks)
     else:
         threshold = _threshold_multi_peak(metrics, n_peaks)
+    
+    if threshold < 20:
+        threshold = 20
+        logger.info("thres_max_fraction_reads_from_single_autosome guessed as < 20, set it to be 20%%.")
 
     return threshold, n_peaks, kde_df
 
@@ -1120,7 +1124,7 @@ def _guess_n_peaks(metrics): # this function is reused a lot, worth merging -- t
     """
     filtered = metrics.loc[
         metrics["filter_atac_min_hqaa"].eq(True),
-        "max_pct_reads_from_single_autosome",
+        "atac_max_pct_reads_from_single_autosome",
     ].astype(float)
 
     log_data = np.log10(filtered)
@@ -1163,10 +1167,10 @@ def _threshold_single_peak(metrics, n_peaks):
         Estimated threshold (in percent).
     """
     filtered = metrics.loc[metrics["filter_atac_min_hqaa"].eq(True)]
-    x = np.log10(filtered["hqaa"])
+    x = np.log10(filtered["atac_hqaa"])
 
     # Attempt 1: Log-transformed y-axis
-    y_log = np.log10(filtered["max_pct_reads_from_single_autosome"])
+    y_log = np.log10(filtered["atac_max_pct_reads_from_single_autosome"])
     max_y = _segment_2d_and_find_max_y(x, y_log)
 
     if max_y is not None:
@@ -1176,7 +1180,7 @@ def _threshold_single_peak(metrics, n_peaks):
     logger.info(
         "2D segmentation failed with log-transform; retrying without log-transform."
     )
-    y_linear = filtered["max_pct_reads_from_single_autosome"]
+    y_linear = filtered["atac_max_pct_reads_from_single_autosome"]
     max_y = _segment_2d_and_find_max_y(x, y_linear)
 
     if max_y is not None:
@@ -1205,7 +1209,7 @@ def _threshold_multi_peak(metrics, n_peaks):
     """
     filtered_data = metrics.loc[
         metrics["filter_atac_min_hqaa"].eq(True),
-        "max_pct_reads_from_single_autosome",
+        "atac_max_pct_reads_from_single_autosome",
     ].astype(float)
 
     return estimate_threshold(filtered_data, classes=n_peaks + 1)
@@ -1412,7 +1416,7 @@ def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax):
     return ax
 
 
-def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.02, s=3):
     """
     Create a barcode rank plot for ATAC high-quality aligned reads.
 
@@ -1431,14 +1435,14 @@ def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.2):
     """
     df = metrics.sort_values('atac_hqaa', ascending=False)
     df['barcode_rank'] = range(1, len(df) + 1)
-    sns.scatterplot(x='barcode_rank', y='atac_hqaa', data=df, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha)
+    sns.scatterplot(x='barcode_rank', y='atac_hqaa', data=df, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel('Barcode rank')
     ax.set_ylabel('Pass filter reads (ATAC)')
     return ax
 
-def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, hue='pass_all_filters', alpha=0.02, s=3):
     """
     Scatter plot of ATAC high-quality reads vs. TSS enrichment.
 
@@ -1454,14 +1458,14 @@ def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, hue='pass_all_filters', a
     -------
     matplotlib.axes.Axes
     """
-    sns.scatterplot(x='atac_hqaa', y='atac_tss_enrichment', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=3)
+    sns.scatterplot(x='atac_hqaa', y='atac_tss_enrichment', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel('Pass filter reads (ATAC)')
     ax.set_ylabel('TSS enrichment')
     return ax
 
-def atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2, s=3):
     """
     Scatter plot of ATAC high-quality reads vs. mitochondrial percentage.
 
@@ -1477,14 +1481,14 @@ def atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2
     -------
     matplotlib.axes.Axes
     """
-    sns.scatterplot(x='atac_hqaa', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=3)
+    sns.scatterplot(x='atac_hqaa', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     #ax.set_yscale('log')
     ax.set_xlabel('Pass filter reads (ATAC)')
     ax.set_ylabel('atac_percent_mitochondrial')
     return ax
 
-def atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2, s=3):
     """
     Scatter plot of ATAC TSS enrichment vs. mitochondrial percentage.
 
@@ -1501,7 +1505,7 @@ def atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters',
     -------
     matplotlib.axes.Axes
     """
-    sns.scatterplot(x='atac_tss_enrichment', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=3)
+    sns.scatterplot(x='atac_tss_enrichment', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel('tss_enrichment')
