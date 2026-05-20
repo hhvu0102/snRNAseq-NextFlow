@@ -51,6 +51,8 @@ donor = args.sample
 logger.info(f"Sample name: {donor}")
 RNA_results_dir = str(args.RNA_results_dir)
 logger.info(f"Input dir for RNA: {RNA_results_dir}")
+RNA_BARCODE_WHITELIST = args.RNA_BARCODE_WHITELIST
+
 CELLBENDER = RNA_results_dir+'cellbender/'+donor+'-hg38.cellbender_FPR_0.05.h5'
 
 RNA_METRICS = RNA_results_dir+'qc/'+donor+'-hg38.qc.txt'
@@ -221,7 +223,7 @@ def log_thresholds(thresholds):
 
     logger.info("\n".join(lines))
 
-thresholds = {
+    thresholds = {
         "rna_min_umi": THRESHOLD_RNA_MIN_UMI,
         "fraction_cb_removed": THRESHOLD_FRACTION_CB_REMOVED,
         "rna_max_mito": THRESHOLD_RNA_MAX_MITO,
@@ -238,7 +240,7 @@ pass_qc_nuclei = list(sorted(metrics[metrics.pass_all_filters].barcode.to_list()
 
 
 # Plot QC metrics #to work on plotting
-fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(3*4, 2*4)) #fig size = width x height
+fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(2*4, 3*4))
 
 ax = axs[0, 0]
 barcode_rank_plot(metrics, ax)
