@@ -1051,6 +1051,214 @@ def _log_knee_warnings(df_interpolated, final_peak_indices, end_cliff_rank, n_pe
 
     logger.info(f"Number of prominent transitions in knee plot: {n_peaks:,}")
 
+######## all functions for ATAC max_pct_reads_from_single_autosome
+# 2D histogram parameters
+_HIST_BINS = 150
+_GAUSSIAN_SIGMA = 2
+_OTSU_CLASSES = 4
+_OTSU_THRESHOLD_INDEX = 0
+
+# Peak detection
+_PEAK_PROMINENCE_FRACTION = 0.05
+
+# Fraction-to-percent conversion
+_FRACTION_TO_PCT = 100
+
+
+def get_atac_max_autosome_threshold(metrics):
+    """
+    Estimate the maximum fraction of reads from a single autosome threshold.
+
+    Uses density-based peak detection to determine the number of underlying
+    distributions. For single-peak distributions, applies 2D histogram
+    segmentation. For multi-peak distributions, falls back to 1D Multi-Otsu.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+        QC metrics DataFrame. Must contain 'max_fraction_reads_from_single_autosome',
+        'filter_atac_min_hqaa', and 'hqaa' (for the 2D method).
+
+    Returns
+    -------
+    tuple
+        (threshold, n_peaks, kde_df) where:
+        - threshold : float, estimated maximum percent reads from single autosome
+        - n_peaks : int, number of peaks detected in the distribution
+        - kde_df : pd.DataFrame with 'x' and 'density' columns for plotting
+    """
+    # Convert fraction to percentage
+    metrics = metrics.copy()
+    metrics["max_pct_reads_from_single_autosome"] = (
+        metrics["max_fraction_reads_from_single_autosome"] * _FRACTION_TO_PCT
+    )
+
+    # Step 1: Detect number of peaks in the distribution
+    n_peaks, kde_df = _guess_n_peaks(metrics)
+
+    # Step 2: Estimate threshold based on peak structure
+    if n_peaks == 1:
+        threshold = _threshold_single_peak(metrics, n_peaks)
+    else:
+        threshold = _threshold_multi_peak(metrics, n_peaks)
+
+    return threshold, n_peaks, kde_df
+
+
+def _guess_n_peaks(metrics): # this function is reused a lot, worth merging -- to do
+    """
+    Detect the number of prominent peaks in the autosome read fraction distribution.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+
+    Returns
+    -------
+    tuple
+        (n_peaks, kde_df)
+    """
+    filtered = metrics.loc[
+        metrics["filter_atac_min_hqaa"].eq(True),
+        "max_pct_reads_from_single_autosome",
+    ].astype(float)
+
+    log_data = np.log10(filtered)
+
+    # Generate KDE and extract curve
+    kde_ax = sns.kdeplot(log_data)
+    x = kde_ax.lines[0].get_xdata()
+    y = kde_ax.lines[0].get_ydata()
+    plt.clf()
+
+    # Detect peaks
+    min_prominence = np.abs(y.max()) * _PEAK_PROMINENCE_FRACTION
+    peaks, _ = find_peaks(y, prominence=min_prominence)
+    n_peaks = len(peaks)
+
+    logger.info(
+        f"Number of prominent peaks in ATAC max_pct_reads_from_single_autosome: {n_peaks:,}"
+    )
+
+    kde_df = pd.DataFrame({"x": x, "density": y})
+
+    return n_peaks, kde_df
+
+
+def _threshold_single_peak(metrics, n_peaks):
+    """
+    Estimate threshold using 2D histogram segmentation for single-peak data.
+
+    Attempts log-transformed y-axis first. If that fails, tries linear y-axis.
+    Falls back to 1D Multi-Otsu if both fail.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+    n_peaks : int
+
+    Returns
+    -------
+    float
+        Estimated threshold (in percent).
+    """
+    filtered = metrics.loc[metrics["filter_atac_min_hqaa"].eq(True)]
+    x = np.log10(filtered["hqaa"])
+
+    # Attempt 1: Log-transformed y-axis
+    y_log = np.log10(filtered["max_pct_reads_from_single_autosome"])
+    max_y = _segment_2d_and_find_max_y(x, y_log)
+
+    if max_y is not None:
+        return round(10**max_y)
+
+    # Attempt 2: Linear y-axis
+    logger.info(
+        "2D segmentation failed with log-transform; retrying without log-transform."
+    )
+    y_linear = filtered["max_pct_reads_from_single_autosome"]
+    max_y = _segment_2d_and_find_max_y(x, y_linear)
+
+    if max_y is not None:
+        return round(10 ** np.log10(max_y))
+
+    # Attempt 3: Fallback to 1D Multi-Otsu
+    logger.info(
+        "2D segmentation failed; falling back to 1D Multi-Otsu."
+    )
+    return _threshold_multi_peak(metrics, n_peaks)
+
+
+def _threshold_multi_peak(metrics, n_peaks):
+    """
+    Estimate threshold using 1D Multi-Otsu for multi-peak distributions.
+
+    Parameters
+    ----------
+    metrics : pd.DataFrame
+    n_peaks : int
+
+    Returns
+    -------
+    float
+        Estimated threshold (in percent).
+    """
+    filtered_data = metrics.loc[
+        metrics["filter_atac_min_hqaa"].eq(True),
+        "max_pct_reads_from_single_autosome",
+    ].astype(float)
+
+    return estimate_threshold(filtered_data, classes=n_peaks + 1)
+
+
+def _segment_2d_and_find_max_y(x, y):
+    """
+    Perform 2D histogram segmentation and find the maximum y-coordinate
+    of the foreground region.
+
+    Parameters
+    ----------
+    x : pd.Series or np.ndarray
+        X-axis values (e.g., log10 HQAA reads).
+    y : pd.Series or np.ndarray
+        Y-axis values (e.g., log10 or linear max_pct_reads_from_single_autosome).
+
+    Returns
+    -------
+    float or None
+        Maximum y-coordinate of the foreground, or None if no foreground found.
+    """
+    # Build 2D histogram
+    heatmap, xedges, yedges = np.histogram2d(x, y, bins=_HIST_BINS)
+
+    # Smooth and threshold
+    smoothed = ski.filters.gaussian(heatmap, sigma=_GAUSSIAN_SIGMA)
+    otsu_thresholds = threshold_multiotsu(
+        image=smoothed, classes=_OTSU_CLASSES
+    )
+    binary_mask = smoothed > otsu_thresholds[_OTSU_THRESHOLD_INDEX]
+
+    # Remove non-background regions
+    labels = ski.morphology.label(binary_mask)
+    label_counts = np.bincount(labels.ravel())
+    background_label = np.argmax(label_counts)
+    binary_mask[labels != background_label] = True
+
+    # Find the highest y-bin containing foreground (transposed view)
+    foreground_rows = np.argwhere(np.any(binary_mask.T, axis=1))
+
+    if foreground_rows.size == 0:
+        return None
+
+    # Convert row index to y-coordinate
+    max_row_index = np.max(foreground_rows)
+    n_rows = binary_mask.shape[0]
+    max_y_coordinate = (
+        yedges[0]
+        + (yedges[-1] - yedges[0]) * (max_row_index / (n_rows - 1))
+    )
+
+    return max_y_coordinate
     
 ######## functions to plot
 def barcode_rank_plot(metrics, ax):
