@@ -37,18 +37,28 @@ nextflow run -resume -params-file library-config.json --barcode-whitelist /path/
 *Previously, the QC scripts are stored separately from this pipeline. I (Ha) am now working on auto-thresholding for all data modality, so I'm committing a lot of QC scripts in this same Github. Eventually these scripts will be reorganized.*
 Under `bin/`, there should be the following scripts for QC thresholding:
 1. `atac_module_qc.py`: QC script for when you have only snATAC-seq data
-* Example command: ```python3 atac_module_qc.py --sample "13617-AH-2" --ATAC_results_dir "/path/to/dataset/" --filter_MT_ATAC "True" --qcPlot "/path/to/13617-AH-2.qcPlots.png" --upsetPlot "/path/to/13617-AH-2.upsetPlot.png" --outmetrics "/path/to/13617-AH-2.outmetrics.csv" --outlogs "/path/to/13617-AH-2.log"
+* Example command:
+```bash
+cd /path/to/snRNAseq-NextFlow/bin # go to where the scripts are stored so helper functions can be imported correctly
+python3 atac_module_qc.py --sample "13617-AH-2" --ATAC_results_dir "/path/to/dataset/" --filter_MT_ATAC "True" --qcPlot "/path/to/13617-AH-2.qcPlots.png" --upsetPlot "/path/to/13617-AH-2.upsetPlot.png" --outmetrics "/path/to/13617-AH-2.outmetrics.csv" --outlogs "/path/to/13617-AH-2.log"
+```
 * Outputs:
-** qcPlot contains multiple plots with different combination of QC metrics
-** upsetPlot shows n nuclei satisfying different QC thresholds
-** outmetrics is a text file with per-barcode QC metrics
-** outlog is a text file recording logs and thresholds as calculated by the implemented algorithms
+- qcPlot contains multiple plots with different combination of QC metrics
+- upsetPlot shows n nuclei satisfying different QC thresholds
+- outmetrics is a text file with per-barcode QC metrics
+- outlog is a text file recording logs and thresholds as calculated by the implemented algorithms
+
 2. `rna_module_qc.py`: QC script for when you have only sc/snRNA-seq data
-* Example command: ```python3 rna_module_qc.py --sample "HPAP-079" --assay_res nuclei --RNA_results_dir "/path/to/dataset/" --qcPlot "/path/to/HPAP-079.qcPlots.png" --upsetPlot "/path/to/HPAP-079.upsetPlot.png" --outmetrics "/path/to/HPAP-079.outmetrics.csv" --outlogs "path/to/HPAP-079.log"
+* Example command:
+```bash
+cd /path/to/snRNAseq-NextFlow/bin # go to where the scripts are stored so helper functions can be imported correctly
+python3 rna_module_qc.py --sample "HPAP-079" --assay_res nuclei --RNA_results_dir "/path/to/dataset/" --qcPlot "/path/to/HPAP-079.qcPlots.png" --upsetPlot "/path/to/HPAP-079.upsetPlot.png" --outmetrics "/path/to/HPAP-079.outmetrics.csv" --outlogs "path/to/HPAP-079.log"
+```
 * Outputs:
-** qcPlot contains multiple plots with different combination of QC metrics
-** upsetPlot shows n nuclei satisfying different QC thresholds
-** outmetrics is a text file with per-barcode QC metrics
-** outlog is a text file recording logs and thresholds as calculated by the implemented algorithms
+- qcPlot contains multiple plots with different combination of QC metrics
+- upsetPlot shows n nuclei satisfying different QC thresholds
+- outmetrics is a text file with per-barcode QC metrics
+- outlog is a text file recording logs and thresholds as calculated by the implemented algorithms
+
 3. `joint_qc.py` 
 emptyDrops_wCellBender.R  helper_joint_qc.py  interactive-barcode-rank-plot.py  joint_qc.py  logging_config.py  plot-qc-metrics.py  __pycache__  qc-from-starsolo.py  rna_module_qc.py  rna_qc.py  rna_qc_test.py
