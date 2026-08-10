@@ -30,10 +30,20 @@ from helper_joint_qc import *
 from logging_config import setup_logging
 import logging
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 parser = argparse.ArgumentParser("Plot QC metrics per sample")
 parser.add_argument("--sample", help="Sample ID.", type=str)
 parser.add_argument("--ATAC_results_dir", help="Path to ATAC results directory.", type=str)
-parser.add_argument("--filter_MT_ATAC", help="Whether to filter ATAC nuclei based on %chrMT threshold. Default: True.", action='store_true', default=False)
+parser.add_argument("--filter_MT_ATAC", help="Whether to filter ATAC nuclei based on %chrMT threshold. Default: True.", type=str2bool, default=True)
 parser.add_argument("--qcPlot", help="Path to save qcPlot plots.", type=str)
 parser.add_argument("--upsetPlot", help="Path to save upset plots.", type=str)
 parser.add_argument("--outmetrics", help="Path to save all metrics results.", type=str)
@@ -51,8 +61,6 @@ donor = args.sample
 logger.info(f"Sample name: {donor}")
 ATAC_results_dir = args.ATAC_results_dir
 logger.info(f"Input dir for ATAC: {ATAC_results_dir}")
-ATAC_BARCODE_WHITELIST = args.ATAC_BARCODE_WHITELIST
-
 ATAC_METRICS = ATAC_results_dir+'ataqv/single-nucleus/'+donor+'-hg38.txt'
 
 # ---upfront thresholds--- 
@@ -69,19 +77,10 @@ atac_metrics.percent_mitochondrial = atac_metrics.percent_mitochondrial.fillna(0
 atac_metrics.tss_enrichment = atac_metrics.tss_enrichment.fillna(0)
 atac_metrics['fraction_mitochondrial'] = atac_metrics.percent_mitochondrial / 100
 
-atac_metrics.index = atac_metrics.index.map(atac_to_rna)
-
-metrics = metrics.set_index('barcode').rename(columns=lambda x: '' + x).join(atac_metrics.rename(columns=lambda x: 'atac_' + x))
+metrics = atac_metrics.rename(columns=lambda x: 'atac_' + x)
 
 # get HQAA threshold
-values = np.log10(atac_metrics[(atac_metrics.tss_enrichment > 2)].hqaa).values
-values = values.reshape((len(values),1))
-thresholds = threshold_multiotsu(image=values, classes=2, nbins=256)
-# convert back to linear scale
-thresholds = [pow(10, i) for i in thresholds]
-lower_thres = round(thresholds[0])
-lower_thres = max(lower_thres, 100)
-values = np.log10(atac_metrics[(atac_metrics.hqaa > lower_thres)].hqaa).values
+values = np.log10(atac_metrics[atac_metrics.hqaa>100].hqaa).values
 values = values.reshape((len(values),1))
 thresholds = threshold_multiotsu(image=values, classes=3, nbins=256)
 # convert back to linear scale
@@ -102,7 +101,7 @@ logger.info(f"THRESHOLD_ATAC_MAX_FRAC_READS_FROM_SINGLE_AUTOSOME = {THRESHOLD_AT
 ### get cells that passed all thresholds; those that passed post-CB nUMIs have been identified above
 metrics['filter_atac_min_hqaa'] = metrics.atac_hqaa >= THRESHOLD_ATAC_MIN_HQAA
 metrics['filter_atac_min_tss_enrichment'] = metrics.atac_tss_enrichment >= THRESHOLD_ATAC_MIN_TSS_ENRICHMENT
-metrics['filter_max_fraction_reads_from_single_autosome'] = metrics.max_fraction_reads_from_single_autosome <= THRESHOLD_ATAC_MAX_FRAC_READS_FROM_SINGLE_AUTOSOME/100
+metrics['filter_max_fraction_reads_from_single_autosome'] = metrics.atac_max_fraction_reads_from_single_autosome <= THRESHOLD_ATAC_MAX_FRAC_READS_FROM_SINGLE_AUTOSOME/100
 if (args.filter_MT_ATAC == True):
     metrics['filter_atac_max_mito'] = metrics.atac_percent_mitochondrial <= THRESHOLD_ATAC_MAX_MITO
 metrics['pass_all_filters'] = metrics.filter(like='filter_').all(axis=1)
@@ -175,22 +174,22 @@ pass_qc_nuclei = list(sorted(metrics[metrics.pass_all_filters].barcode.to_list()
 fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(2*4, 2*4))
 
 ax=axs[0, 0]
-atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax)
+atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, alpha=0.02, s=3)
 ax.axvline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--', label='THRESHOLD_ATAC_MIN_HQAA = {:,}'.format(THRESHOLD_ATAC_MIN_HQAA))
 ax.axhline(THRESHOLD_ATAC_MIN_TSS_ENRICHMENT, color='red', ls='--')
 
 ax=axs[0, 1]
-barcode_rank_plot(metrics, ax)
+barcode_rank_plot_atac(metrics, ax, alpha=0.02, s=3)
 ax.axhline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
 
 ax=axs[1, 0]
-atac_hqaa_vs_atac_mt_pct_plot(metrics, ax)
+atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, alpha=0.02, s=3)
 ax.axvline(THRESHOLD_ATAC_MIN_HQAA, color='red', ls='--')
 ax.axhline(THRESHOLD_ATAC_MAX_MITO, color='red', ls='--', label='THRESHOLD_ATAC_MAX_MITO = {:,}'.format(THRESHOLD_ATAC_MAX_MITO))
 ax.legend()
 
 ax=axs[1, 1]
-sns.scatterplot(x='hqaa', y='max_fraction_reads_from_single_autosome', ax=ax, data=metrics, hue='pass_all_filters', palette={True: 'red', False: 'black'}, edgecolor=None, alpha=0.02, s=3)
+sns.scatterplot(x='atac_hqaa', y='atac_max_fraction_reads_from_single_autosome', ax=ax, data=metrics, hue='pass_all_filters', palette={True: 'red', False: 'black'}, edgecolor=None, alpha=0.02, s=3)
 ax.set_xscale('log')
 ax.set_xlabel('HQAA')
 ax.set_ylabel('Max fraction reads from single autosome')
@@ -198,7 +197,7 @@ ax.axvline(THRESHOLD_ATAC_MIN_HQAA, ls='--')
 ax.axhline(THRESHOLD_ATAC_MAX_FRAC_READS_FROM_SINGLE_AUTOSOME/100, ls='--', label='MAX_FRAC_READS_FROM_SINGLE_AUTOSOME = {:,}'.format(THRESHOLD_ATAC_MAX_FRAC_READS_FROM_SINGLE_AUTOSOME/100))
 ax.legend()
 
-fig.suptitle('{:,} pass QC nuclei'.format(len(pass_qc_nuclei)) + " " + sample)
+fig.suptitle('{:,} pass QC nuclei'.format(len(pass_qc_nuclei)) + " " + donor)
 fig.tight_layout()
 fig.savefig(args.qcPlot, bbox_inches='tight', dpi=300)
 

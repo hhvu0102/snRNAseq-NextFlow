@@ -959,7 +959,7 @@ def get_atac_max_autosome_threshold(metrics):
     Parameters
     ----------
     metrics : pd.DataFrame
-        QC metrics DataFrame. Must contain 'max_fraction_reads_from_single_autosome',
+        QC metrics DataFrame. Must contain 'atac_max_fraction_reads_from_single_autosome',
         'filter_atac_min_hqaa', and 'hqaa' (for the 2D method).
 
     Returns
@@ -1173,7 +1173,7 @@ def rna_umis_vs_atac_hqaa_plot(metrics, ax):
     ax.set_ylabel('Pass filter reads (ATAC)')
     return ax
 
-def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.2, s=3):
     """
     Create a barcode rank plot for ATAC high-quality aligned reads.
 
@@ -1192,14 +1192,14 @@ def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.2):
     """
     df = metrics.sort_values('atac_hqaa', ascending=False)
     df['barcode_rank'] = range(1, len(df) + 1)
-    sns.scatterplot(x='barcode_rank', y='atac_hqaa', data=df, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha)
+    sns.scatterplot(x='barcode_rank', y='atac_hqaa', data=df, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel('Barcode rank')
     ax.set_ylabel('Pass filter reads (ATAC)')
     return ax
 
-def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, hue='pass_all_filters', alpha=0.02, s=3):
     """
     Scatter plot of ATAC high-quality reads vs. TSS enrichment.
 
@@ -1215,14 +1215,14 @@ def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax, hue='pass_all_filters', a
     -------
     matplotlib.axes.Axes
     """
-    sns.scatterplot(x='atac_hqaa', y='atac_tss_enrichment', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=3)
+    sns.scatterplot(x='atac_hqaa', y='atac_tss_enrichment', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel('Pass filter reads (ATAC)')
     ax.set_ylabel('TSS enrichment')
     return ax
 
-def atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2, s=3):
     """
     Scatter plot of ATAC high-quality reads vs. mitochondrial percentage.
 
@@ -1238,14 +1238,14 @@ def atac_hqaa_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2
     -------
     matplotlib.axes.Axes
     """
-    sns.scatterplot(x='atac_hqaa', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=3)
+    sns.scatterplot(x='atac_hqaa', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     #ax.set_yscale('log')
     ax.set_xlabel('Pass filter reads (ATAC)')
     ax.set_ylabel('atac_percent_mitochondrial')
     return ax
 
-def atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2):
+def atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters', alpha=0.2, s=3):
     """
     Scatter plot of ATAC TSS enrichment vs. mitochondrial percentage.
 
@@ -1262,7 +1262,7 @@ def atac_tss_enrichment_vs_atac_mt_pct_plot(metrics, ax, hue='pass_all_filters',
     -------
     matplotlib.axes.Axes
     """
-    sns.scatterplot(x='atac_tss_enrichment', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=3)
+    sns.scatterplot(x='atac_tss_enrichment', y='atac_percent_mitochondrial', data=metrics, ax=ax, hue=hue, palette={True: 'red', False: 'black'}, edgecolor=None, alpha=alpha, s=s)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xlabel('tss_enrichment')
