@@ -1,27 +1,38 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-import seaborn as sns
-import tables
-import anndata
-from typing import Dict, Optional
-import numpy as np
-import scipy.sparse as sp
-from scipy import io
-import glob
-import os
-import upsetplot
-from scipy.io import mmread
-import csv
 import logging
-from scipy.interpolate import interp1d
-from scipy.signal import find_peaks, savgol_filter
+import math
+from typing import Dict, Tuple, Optional
 
+import anndata # type: ignore
+import matplotlib.pyplot as plt # type: ignore
+import numpy as np # type: ignore
+import pandas as pd # type: ignore
+import scipy.sparse as sp # type: ignore
+import seaborn as sns # type: ignore
+import skimage as ski # type: ignore
+import tables # type: ignore
+from scipy.interpolate import interp1d # type: ignore
+from scipy.signal import find_peaks, savgol_filter # type: ignore
+from skimage.filters import threshold_multiotsu # type: ignore
+from skimage import measure # type: ignore
 
-#### FUNCTIONS FROM CELLBENDER
+# --- LOGGER CONFIGURATION ---
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "\n" + "=" * 60 + "\n%(levelname)s: %(message)s\n" + "=" * 60 + "\n"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+# ==============================================================================
+# 1. CELLBENDER UTILITIES
+# ==============================================================================
 def dict_from_h5(file: str) -> Dict[str, np.ndarray]:
     """Read in everything from an h5 file and put into a dictionary."""
     d = {}
@@ -124,7 +135,6 @@ def anndata_from_h5(file: str,
 
     return adata
 
-
 def _fill_adata_slots_automatically(adata, d):
     """Add other information to the adata object in the appropriate slot."""
 
@@ -152,12 +162,8 @@ def _fill_adata_slots_automatically(adata, d):
         except Exception:
             print('Unable to load data into AnnData: ', key, value, type(value))
 
-
-#### END FUNCTIONS FROM CELLBENDER
-
 def cellbender_anndata_to_cell_probability(a):
     return a.obs.cell_probability
-
 
 def cellbender_anndata_to_sparse_matrix(adata, min_cell_probability=0):
     barcodes = adata.obs[adata.obs.cell_probability>=min_cell_probability].index.to_list()
@@ -170,8 +176,9 @@ def umi_count_after_decontamination(adata):
     x = cellbender_anndata_to_sparse_matrix(adata)
     return dict(zip(x['barcodes'], x['matrix'].sum(axis=0).tolist()[0]))
 
-
-from skimage.filters import threshold_multiotsu
+# ==============================================================================
+# 2. CORE THRESHOLDING OPERATIONS
+# ==============================================================================
 def estimate_threshold(x, classes=3, log_scale = True): #function to run Otsu 1D
     if log_scale == True: # do on logscale
         values = np.log10(x).values
@@ -186,29 +193,98 @@ def estimate_threshold(x, classes=3, log_scale = True): #function to run Otsu 1D
     UMI_THRESHOLD = round(thresholds[classes - 2])
     return UMI_THRESHOLD
 
+def thresholds_on_2d_matrix(x, y, bins=150, n_classes = 4, chosen_class = 1): # Create a 2D array representation
+    """
+    Estimate thresholds from a 2D histogram using Multi-Otsu segmentation.
 
-##### LOGGER
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+    Creates a 2D histogram heatmap, applies Gaussian smoothing and Multi-Otsu
+    thresholding to segment foreground from background, then identifies the
+    largest connected region and returns its boundary coordinates.
 
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "\n" + "=" * 60 + "\n%(levelname)s: %(message)s\n" + "=" * 60 + "\n"
+    Parameters
+    ----------
+    x : array-like
+        Values for the x-axis of the 2D histogram.
+    y : array-like
+        Values for the y-axis of the 2D histogram.
+    bins : int, optional
+        Number of bins for the 2D histogram. Smaller values produce smoother
+        heatmaps. Default is 150 (chosen after testing 50, 100, 150, 200, 300).
+    n_classes : int, optional
+        Number of classes for Multi-Otsu thresholding. Default is 4.
+    chosen_class : int, optional
+        Index of the Multi-Otsu threshold to use for binarization. Default is 1.
+
+    Returns
+    -------
+    tuple
+        (min_x_coordinate, max_y_coordinate) of the largest foreground region,
+        or (None, None) if no foreground region is found.
+    """
+
+    # Step 1: Build 2D histogram
+    heatmap, xedges, yedges = np.histogram2d(x, y, bins=bins) # the smaller bins is, the smoother the heatmap would be. bins=150 was chosen after testing 50, 100, 150, 200 and 300
+    
+    # Step 2: Smooth the heatmap with a Gaussian filter
+    smoothed = ski.filters.gaussian(heatmap, sigma=2)
+
+    # Step 3: Apply Multi-Otsu thresholding to separate foreground/background
+    otsu_thresholds = threshold_multiotsu(image=smoothed, classes=n_classes)
+    binary_mask = smoothed > otsu_thresholds[chosen_class]
+
+    # Step 4: Label connected components and remove non-background regions
+    labels = ski.morphology.label(binary_mask)
+    label_counts = np.bincount(labels.ravel())
+    background_label = np.argmax(label_counts)
+    binary_mask[labels != background_label] = True
+
+    # Step 5: Find the largest connected foreground region (transposed view)
+    foreground_mask = binary_mask.T.astype(bool) & (binary_mask.T != 0)
+    region_labels = measure.label(foreground_mask, connectivity=2)
+    region_props = measure.regionprops(region_labels)
+
+    if not region_props:
+        return None, None
+
+    largest_region = max(region_props, key=lambda r: r.area)
+    largest_mask = region_labels == largest_region.label
+
+    # Step 6: Extract boundary coordinates from the largest region
+    true_row_indices = np.argwhere(np.any(largest_mask, axis=1))
+
+    if true_row_indices.size == 0:
+        return None, None
+
+    # Convert the highest row index to a y-coordinate
+    max_row_index = np.max(true_row_indices)
+    n_rows = binary_mask.shape[0]
+    max_y_coordinate = yedges[0] + (yedges[-1] - yedges[0]) * (
+        max_row_index / (n_rows - 1)
     )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
 
-##### FUNCTIONS FOR MITO THRESHOLDS
-from scipy.signal import find_peaks
-import skimage as ski
-from scipy import ndimage as ndi
-from skimage import measure
-import matplotlib.pyplot as plt
+    # Convert the minimum column index to an x-coordinate
+    region_coords = np.column_stack(np.where(largest_mask))
+    min_col_index = region_coords[:, 1].min()
+    min_x_coordinate = xedges[min_col_index]
 
+    return min_x_coordinate, max_y_coordinate
+
+def _extract_kde_peaks(data: pd.Series, prominence_fraction: float = 0.05) -> Tuple[np.ndarray, int, pd.DataFrame]:
+    """Universal internal helper to generate KDE layouts and pull peaks safely."""
+    kde = sns.kdeplot(data)
+    x, y = kde.lines[0].get_xdata(), kde.lines[0].get_ydata()
+    plt.clf()
+    
+    peaks, _ = find_peaks(y, prominence=abs(max(y) * prominence_fraction))
+    return peaks, len(peaks), pd.DataFrame({'x': x, 'density': y})
+
+# ==============================================================================
+# 3. DOMAIN ANALYSIS MODULES (RNA, ATAC, CELLBENDER, EXON)
+# ==============================================================================
 def guess_n_classes(metrics, mode = 'RNA'):
     """
     Guess the number of classes (peaks) in the mitochondrial percentage distribution.
+    These classes mean whether data is split into multiple groups based on chrMT profile.
 
     Parameters
     ----------
@@ -265,118 +341,23 @@ def guess_n_classes(metrics, mode = 'RNA'):
 
     # Step 2: get density and check number of distributions
     if mode == "RNA":
-        data = np.log10(metrics[(metrics.filter_rna_emptyDrops == True) &
-                               (metrics.filter_rna_min_umi == True) &
-                               (metrics.rna_percent_mitochondrial > thresholds[0]) &
-                               (metrics.rna_percent_mitochondrial < 50) &
-                               (metrics.filter_pct_cellbender_removed == True)].rna_percent_mitochondrial.astype(float))
+        cond_step2 = (metrics.filter_rna_emptyDrops) & (metrics.filter_rna_min_umi) & \
+                     (metrics.rna_percent_mitochondrial > thresholds[0]) & (metrics.rna_percent_mitochondrial < 50) & \
+                     (metrics.filter_pct_cellbender_removed)
+        target_data = np.log10(metrics[cond_step2].rna_percent_mitochondrial.astype(float))
     else:
-        data = metrics[(metrics.filter_atac_min_hqaa == True) &
-                       (metrics.atac_percent_mitochondrial > thresholds[0]) &
-                       (metrics.atac_percent_mitochondrial < 50)].atac_percent_mitochondrial.astype(float)
+        cond_step2 = (metrics.filter_atac_min_hqaa) & (metrics.atac_percent_mitochondrial > thresholds[0]) & (metrics.atac_percent_mitochondrial < 50)
+        target_data = metrics[cond_step2].atac_percent_mitochondrial.astype(float)
 
-    kde = sns.kdeplot(data) # Generate KDE object from the data
-    # The plotted data is stored in kde.lines[0].get_xdata() and .get_ydata()
-    x = kde.lines[0].get_xdata()
-    y = kde.lines[0].get_ydata()
+    _, n_peaks, kde_df = _extract_kde_peaks(target_data)
 
-    peaks, _ = find_peaks(y, prominence=abs(max(y) * 0.05))
-    n_peaks = len(peaks)
     logger.info(
         f"Number of prominent peaks in {mode} %chrMT distribution: {n_peaks:,}"
     )
 
-    if mode == "RNA":
-        rna_kde_df = pd.DataFrame({'x': x, 'density': y}) # Store in DataFrame for later plots
-        plt.clf() # Clear the plot
-        return n_peaks, rna_kde_df
-    else:
-        atac_kde_df = pd.DataFrame({'x': x, 'density': y}) # Store in DataFrame
-        plt.clf()
-        return n_peaks, atac_kde_df
+    return n_peaks, kde_df
 
-### get THRESHOLD_RNA_MAX_MITO and THRESHOLD_ATAC_MAX_MITO
-### get THRESHOLD_RNA_MAX_MITO
-def thresholds_on_2d_matrix(x, y, bins=150, n_classes = 4, chosen_class = 1): # Create a 2D array representation
-    """
-    Estimate thresholds from a 2D histogram using Multi-Otsu segmentation.
-
-    Creates a 2D histogram heatmap, applies Gaussian smoothing and Multi-Otsu
-    thresholding to segment foreground from background, then identifies the
-    largest connected region and returns its boundary coordinates.
-
-    Parameters
-    ----------
-    x : array-like
-        Values for the x-axis of the 2D histogram.
-    y : array-like
-        Values for the y-axis of the 2D histogram.
-    bins : int, optional
-        Number of bins for the 2D histogram. Smaller values produce smoother
-        heatmaps. Default is 150 (chosen after testing 50, 100, 150, 200, 300).
-    n_classes : int, optional
-        Number of classes for Multi-Otsu thresholding. Default is 4.
-    chosen_class : int, optional
-        Index of the Multi-Otsu threshold to use for binarization. Default is 1.
-
-    Returns
-    -------
-    tuple
-        (min_x_coordinate, max_y_coordinate) of the largest foreground region,
-        or (None, None) if no foreground region is found.
-    """
-
-    # Step 1: Build 2D histogram
-    heatmap, xedges, yedges = np.histogram2d(x, y, bins=bins) # the smaller bins is, the smoother the heatmap would be. bins=150 was chosen after testing 50, 100, 150, 200 and 300
-    
-    # Step 2: Smooth the heatmap with a Gaussian filter
-    smooth = ski.filters.gaussian(heatmap, sigma=2) #use Gaussian filtering to smooth out the data points that do not cluster together
-
-    # Step 2: Smooth the heatmap with a Gaussian filter
-    smoothed = ski.filters.gaussian(heatmap, sigma=2)
-
-    # Step 3: Apply Multi-Otsu thresholding to separate foreground/background
-    otsu_thresholds = threshold_multiotsu(image=smoothed, classes=n_classes)
-    binary_mask = smoothed > otsu_thresholds[chosen_class]
-
-    # Step 4: Label connected components and remove non-background regions
-    labels = ski.morphology.label(binary_mask)
-    label_counts = np.bincount(labels.ravel())
-    background_label = np.argmax(label_counts)
-    binary_mask[labels != background_label] = True
-
-    # Step 5: Find the largest connected foreground region (transposed view)
-    foreground_mask = binary_mask.T.astype(bool) & (binary_mask.T != 0)
-    region_labels = measure.label(foreground_mask, connectivity=2)
-    region_props = measure.regionprops(region_labels)
-
-    if not region_props:
-        return None, None
-
-    largest_region = max(region_props, key=lambda r: r.area)
-    largest_mask = region_labels == largest_region.label
-
-    # Step 6: Extract boundary coordinates from the largest region
-    true_row_indices = np.argwhere(np.any(largest_mask, axis=1))
-
-    if true_row_indices.size == 0:
-        return None, None
-
-    # Convert the highest row index to a y-coordinate
-    max_row_index = np.max(true_row_indices)
-    n_rows = binary_mask.shape[0]
-    max_y_coordinate = yedges[0] + (yedges[-1] - yedges[0]) * (
-        max_row_index / (n_rows - 1)
-    )
-
-    # Convert the minimum column index to an x-coordinate
-    region_coords = np.column_stack(np.where(largest_mask))
-    min_col_index = region_coords[:, 1].min()
-    min_x_coordinate = xedges[min_col_index]
-
-    return min_x_coordinate, max_y_coordinate
-            
-def get_chrMT_threshold_RNA(metrics, n_peaks): 
+def get_chrMT_threshold_RNA(metrics, n_peaks): ### get THRESHOLD_RNA_MAX_MITO
     """
     Determine the RNA mitochondrial percentage threshold.
 
@@ -398,58 +379,31 @@ def get_chrMT_threshold_RNA(metrics, n_peaks):
     float
         The estimated maximum mitochondrial percentage threshold for RNA.
     """
-    upper_n_barcodes = len(metrics[metrics.filter_rna_min_umi == True])
+    upper_n_barcodes = len(metrics[metrics.filter_rna_min_umi])
+    cond = (metrics.filter_rna_emptyDrops) & (metrics.filter_rna_min_umi) & \
+           (metrics.rna_percent_mitochondrial > (1 if upper_n_barcodes > 2000 else 0)) & \
+           (metrics.rna_percent_mitochondrial < 40) & (metrics.filter_pct_cellbender_removed)
     
-    if n_peaks == 1 and upper_n_barcodes > 2000:
-        logger.info("RNA chrMT thresholding: Will log-transform %%chrMT.")
-        # Subset the nuclei to those that passed both emptydrops and post-CB nUMI thresholds, and have 0 < %chrMT < 40% to determine the %chrMT threshold. 40% is used since %chrMT per nucleus/cell should be below this threshold in practice https://pmc.ncbi.nlm.nih.gov/articles/PMC8599307/
-        x = np.log10(metrics[(metrics.filter_rna_emptyDrops == True) & 
-                            (metrics.filter_rna_min_umi == True) &
-                            (metrics.rna_percent_mitochondrial > 1) &
-                            (metrics.rna_percent_mitochondrial < 40) &
-                            (metrics.filter_pct_cellbender_removed == True)].rna_umis)
-        y = np.log10(metrics[(metrics.filter_rna_emptyDrops == True) & 
-                    (metrics.filter_rna_min_umi == True) &
-                    (metrics.rna_percent_mitochondrial > 1) &
-                    (metrics.rna_percent_mitochondrial < 40) &
-                    (metrics.filter_pct_cellbender_removed == True)].rna_percent_mitochondrial)
-        
-        min_x_coordinate, max_y_coordinate = thresholds_on_2d_matrix(x, y)
-    elif n_peaks == 1 and upper_n_barcodes <= 2000:
-        logger.info("RNA chrMT thresholding: Will *not* log-transform %%chrMT.")
-        x = np.log10(metrics[(metrics.filter_rna_emptyDrops == True) & 
-                             (metrics.filter_rna_min_umi == True) &
-                             (metrics.rna_percent_mitochondrial > 0) & #if data too sparse, include more data points
-                             (metrics.rna_percent_mitochondrial < 40) &
-                             (metrics.filter_pct_cellbender_removed == True)].rna_umis)
-        y = metrics[(metrics.filter_rna_emptyDrops == True) &
-                    (metrics.filter_rna_min_umi == True) &
-                    (metrics.rna_percent_mitochondrial > 0) &
-                    (metrics.rna_percent_mitochondrial < 40) &
-                    (metrics.filter_pct_cellbender_removed == True)].rna_percent_mitochondrial
-        
-        min_x_coordinate, max_y_coordinate = thresholds_on_2d_matrix(x, y)
+    subset = metrics[cond]
+    x = np.log10(subset.rna_umis)
+    y = np.log10(subset.rna_percent_mitochondrial) if upper_n_barcodes > 2000 else subset.rna_percent_mitochondrial
     
-    if (n_peaks == 1 and max_y_coordinate == "None") or n_peaks > 1:
+    min_x, max_y = (thresholds_on_2d_matrix(x, y) if n_peaks == 1 else (None, None))
+    
+    if n_peaks > 1 or max_y is None:
         logger.info("RNA chrMT thresholding: Using Multi-Otsu on 1D array of chrMT.")
-        THRESHOLD_RNA_MAX_MITO = estimate_threshold(metrics[(metrics.filter_rna_emptyDrops == True) &
-                                                            (metrics.rna_percent_mitochondrial > 1) &
-                                                            (metrics.rna_percent_mitochondrial < 40) &
-                                                            (metrics.filter_pct_cellbender_removed == True)].rna_percent_mitochondrial.astype(float), classes = n_peaks+1)
-    elif n_peaks == 1 and upper_n_barcodes >= 2000 and max_y_coordinate != "None":
-        THRESHOLD_RNA_MAX_MITO = round(pow(10, max_y_coordinate), 2)
-    elif n_peaks == 1 and upper_n_barcodes < 2000 and max_y_coordinate != "None":
-        max_y_coordinate = np.log10(max_y_coordinate)
-        THRESHOLD_RNA_MAX_MITO = round(pow(10, max_y_coordinate), 2)
+        fallback_cond = (metrics.filter_rna_emptyDrops) & (metrics.rna_percent_mitochondrial > 1) & \
+                        (metrics.rna_percent_mitochondrial < 40) & (metrics.filter_pct_cellbender_removed)
+        threshold_val = estimate_threshold(metrics[fallback_cond].rna_percent_mitochondrial.astype(float), classes=n_peaks + 1)
+    else:
+        if upper_n_barcodes <= 2000:
+            max_y = np.log10(max_y)
+        threshold_val = round(pow(10, max_y), 2)
         
-    if THRESHOLD_RNA_MAX_MITO < 5:
-        logger.info("THRESHOLD_RNA_MAX_MITO guessed as < 5, set it to be 5%%.")
-        THRESHOLD_RNA_MAX_MITO = 5 #if THRESHOLD_RNA_MAX_MITO is very low, set it to be 5%
-        
-    return THRESHOLD_RNA_MAX_MITO
+    return max(threshold_val, 5.0)
 
-### THRESHOLD_ATAC_MAX_MITO
-def get_chrMT_threshold_ATAC(metrics, n_peaks):
+
+def get_chrMT_threshold_ATAC(metrics, n_peaks): ### THRESHOLD_ATAC_MAX_MITO
     """
     Determine the ATAC mitochondrial percentage threshold.
 
@@ -470,32 +424,20 @@ def get_chrMT_threshold_ATAC(metrics, n_peaks):
     float
         The estimated maximum mitochondrial percentage threshold for ATAC.
     """
+    min_x, max_y = None, None
     if n_peaks == 1:
-        logger.info("ATAC module chrMT thresholding: Will *not* log transform %%chrMT.")
         # Subset the nuclei to those that passed both emptydrops and post-CB nUMI thresholds, and have 1% < %chrMT < 40% to determine the %chrMT threshold. 40% is used since %chrMT per nucleus/cell should be below this threshold in practice https://pmc.ncbi.nlm.nih.gov/articles/PMC8599307/
-        x = np.log10(metrics[(metrics.filter_atac_min_hqaa == True) &
-                            (metrics.atac_percent_mitochondrial > 0) &
-                            (metrics.atac_percent_mitochondrial < 40)].atac_hqaa)
-        y = metrics[(metrics.filter_atac_min_hqaa == True) &
-                    (metrics.atac_percent_mitochondrial > 0) &
-                    (metrics.atac_percent_mitochondrial < 40)].atac_percent_mitochondrial
+        cond = (metrics.filter_atac_min_hqaa) & (metrics.atac_percent_mitochondrial > 0) & (metrics.atac_percent_mitochondrial < 40)
+        min_x, max_y = thresholds_on_2d_matrix(np.log10(metrics[cond].atac_hqaa), metrics[cond].atac_percent_mitochondrial)
 
-        min_x_coordinate, max_y_coordinate = thresholds_on_2d_matrix(x, y)
-
-    if (n_peaks == 1 and max_y_coordinate == "None") or n_peaks > 1:
+    if n_peaks > 1 or max_y is None:
         logger.info("ATAC module chrMT thresholding: Use Multi-Otsu on 1D array of chrMT.")
-        THRESHOLD_ATAC_MAX_MITO = estimate_threshold(metrics[(metrics.filter_atac_min_hqaa == True) &
-                                                            (metrics.atac_percent_mitochondrial > 0) &
-                                                            (metrics.atac_percent_mitochondrial < 40)].atac_percent_mitochondrial.astype(float), classes = n_peaks+1, log_scale=False)
-    elif n_peaks == 1 and max_y_coordinate != "None":
-        max_y_coordinate = np.log10(max_y_coordinate)
-        THRESHOLD_ATAC_MAX_MITO = round(pow(10, max_y_coordinate), 2)
+        cond_fallback = (metrics.filter_atac_min_hqaa) & (metrics.atac_percent_mitochondrial > 0) & (metrics.atac_percent_mitochondrial < 40)
+        threshold_val = estimate_threshold(metrics[cond_fallback].atac_percent_mitochondrial.astype(float), classes=n_peaks + 1, log_scale=False)
+    else:
+        threshold_val = round(pow(10, np.log10(max_y)), 2)
 
-    if THRESHOLD_ATAC_MAX_MITO < 5:
-        logger.info("THRESHOLD_ATAC_MAX_MITO guessed as < 5, set it to be 5%%.")
-        THRESHOLD_ATAC_MAX_MITO = 5 #if THRESHOLD_ATAC_MAX_MITO is very low, set it to be 5
-
-    return THRESHOLD_ATAC_MAX_MITO
+    return max(threshold_val, 5.0)
 
 ### functions to get CellBender-related thresholds: %ambient removed and post-CB nUMIs
 def guess_n_classes_cellbender(metrics):
@@ -518,23 +460,8 @@ def guess_n_classes_cellbender(metrics):
         - n_peaks : int, number of prominent peaks detected
         - kde_df : pd.DataFrame with columns 'x' and 'density' for downstream plotting
     """
-
-    data = metrics[(metrics.pct_cellbender_removed > 5) & # assuming metrics.pct_cellbender_removed < 5 is good
-                   (metrics.pct_cellbender_removed < 50) &
-                   (np.isnan(metrics.pct_cellbender_removed) == False)].pct_cellbender_removed.astype(float)
-
-    kde = sns.kdeplot(data) # Generate KDE object from the data
-    # The plotted data is stored in kde.lines[0].get_xdata() and .get_ydata()
-    x = kde.lines[0].get_xdata()
-    y = kde.lines[0].get_ydata()
-
-    peaks, _ = find_peaks(y, prominence=abs(max(y) * 0.05))
-    n_peaks = len(peaks)
-
-    cb_kde_df = pd.DataFrame({'x': x, 'density': y}) # Store in DataFrame for later plots
-    plt.clf() # Clear the plot
-
-    return peaks, n_peaks, cb_kde_df
+    cond = (metrics.pct_cellbender_removed > 5) & (metrics.pct_cellbender_removed < 50) & (~metrics.pct_cellbender_removed.isna())
+    return _extract_kde_peaks(metrics[cond].pct_cellbender_removed.astype(float))
 
 def get_cellbender_thresholds(metrics, peaks_cb, n_peaks_cb, cb_kde_df): 
     """
@@ -568,36 +495,22 @@ def get_cellbender_thresholds(metrics, peaks_cb, n_peaks_cb, cb_kde_df):
         - threshold_post_cb_umis : float, minimum UMI count after CellBender
     """
     logger.info(f"Number of classes in %% ambient CellBender removed: {n_peaks_cb:,}")
+    cond = (metrics.pct_cellbender_removed > 5) & (metrics.pct_cellbender_removed < 50) & (~metrics.pct_cellbender_removed.isna())
+    subset = metrics[cond]
+
     if n_peaks_cb == 1:
-        x = np.log10(metrics[(metrics.pct_cellbender_removed > 5) &
-                             (metrics.pct_cellbender_removed < 50) &
-                             (np.isnan(metrics.pct_cellbender_removed) == False)].post_cellbender_umis)
-        y = metrics[(metrics.pct_cellbender_removed > 5) &
-                    (metrics.pct_cellbender_removed < 50) &
-                    (np.isnan(metrics.pct_cellbender_removed) == False)].fraction_cellbender_removed
-        min_x_coordinate, max_y_coordinate = thresholds_on_2d_matrix(x, y, chosen_class=0)
-        THRESHOLD_FRACTION_CB_REMOVED = round(max_y_coordinate, 2)
-        THRESHOLD_POST_CB_UMIS = round(pow(10, min_x_coordinate))
-
-        if THRESHOLD_FRACTION_CB_REMOVED < 0.2:
-            THRESHOLD_FRACTION_CB_REMOVED = 0.2
-    else:
-        THRESHOLD_FRACTION_CB_REMOVED = round(int(cb_kde_df.x[np.where(cb_kde_df.density == 
-                                                                 cb_kde_df.density[peaks_cb[len(peaks_cb)-2]:peaks_cb[len(peaks_cb)-1]].min())[0]])/100, 2)
-        THRESHOLD_POST_CB_UMIS = estimate_threshold(metrics[(metrics.pct_cellbender_removed > 5) &
-                                                            (metrics.pct_cellbender_removed < 50) &
-                                                            (np.isnan(metrics.pct_cellbender_removed) == False)].post_cellbender_umis.astype(float),
-                                                  classes = 2)
-        
-    return THRESHOLD_FRACTION_CB_REMOVED, THRESHOLD_POST_CB_UMIS
+        min_x, max_y = thresholds_on_2d_matrix(np.log10(subset.post_cellbender_umis), subset.fraction_cellbender_removed, chosen_class=0)
+        return max(round(max_y, 2), 0.2), round(pow(10, min_x))
+    
+    valley_idx = cb_kde_df.density[peaks_cb[-2]:peaks_cb[-1]].idxmin()
+    thresh_frac = round(int(cb_kde_df.x[valley_idx]) / 100, 2)
+    thresh_umi = estimate_threshold(subset.post_cellbender_umis.astype(float), classes=2)
+    return thresh_frac, thresh_umi
 
 
-## function helper to estimate RNA UMI threshold
-import math
 def round_up(n, decimals=0):
     multiplier = 10**decimals
     return math.ceil(n / multiplier) * multiplier
-
 
 ### function to get exon/full gene ratio threshold:
 def guess_n_classes_exon_fullgene(metrics):
@@ -620,23 +533,10 @@ def guess_n_classes_exon_fullgene(metrics):
         - n_peaks_exon : int, number of prominent peaks detected
         - exon_kde_df : pd.DataFrame with columns 'x' and 'density' for downstream plotting
     """
-    data = metrics[(metrics.rna_exon_to_full_gene_body_ratio>0.5)&
-              (metrics.rna_exon_to_full_gene_body_ratio<1.0)].rna_exon_to_full_gene_body_ratio.astype(float)
+    cond = (metrics.rna_exon_to_full_gene_body_ratio > 0.5) & (metrics.rna_exon_to_full_gene_body_ratio < 1.0)
+    return _extract_kde_peaks(metrics[cond].rna_exon_to_full_gene_body_ratio.astype(float))
 
-    kde = sns.kdeplot(data) # Generate KDE object from the data
-    # The plotted data is stored in kde.lines[0].get_xdata() and .get_ydata()
-    x = kde.lines[0].get_xdata()
-    y = kde.lines[0].get_ydata()
-
-    peaks_exon, _ = find_peaks(y, prominence=abs(max(y) * 0.05))
-    n_peaks_exon = len(peaks_exon)
-
-    exon_kde_df = pd.DataFrame({'x': x, 'density': y}) # Store in DataFrame for later plots
-    plt.clf() # Clear the plot
-
-    return peaks_exon, n_peaks_exon, exon_kde_df
-
-def get_exon_fullgene_ratio(x, y):
+def get_exon_fullgene_ratio(x, y, metrics = None):
     """
     Estimate the exon-to-full-gene-body ratio threshold using 2D segmentation.
 
@@ -660,42 +560,32 @@ def get_exon_fullgene_ratio(x, y):
     float
         Estimated exon-to-full-gene-body ratio threshold, rounded to 2 decimals.
     """
-    heatmap, xedges, yedges = np.histogram2d(x, y, bins=50) # the smaller bins is, the smoother the heatmap would be. bins=150 was chosen after testing 50, 100, 150, 200 and 300
-
-    smooth = ski.filters.gaussian(heatmap, sigma=2) #use Gaussian filtering to smooth out the data points that do not cluster together
-    thresh = smooth > threshold_multiotsu(image=smooth, classes = 4)[1] #use Multi-Otsu to estimate a threshold that marks foreground and background in the image `smooth`
+    heatmap, xedges, yedges = np.histogram2d(x, y, bins=50)
+    smooth = ski.filters.gaussian(heatmap, sigma=2)
+    thresh = smooth > threshold_multiotsu(image=smooth, classes=4)[1]
+    
     labels = ski.morphology.label(thresh)
-    labelCount = np.bincount(labels.ravel())
-    background = np.argmax(labelCount)
-    thresh[labels != background] = 255
-    heatmap_seg = thresh
-    # mask_T is the transpose of heatmap_seg as clusters are along y axis
-    mask_T = heatmap_seg.T
-    y_bins_has_white = np.any(mask_T == True, axis=1)
-    white_indices = np.where(y_bins_has_white)[0]
+    thresh[labels != np.argmax(np.bincount(labels.ravel()))] = 255
+    white_indices = np.where(np.any(thresh.T, axis=1))[0]
 
-    if (len(white_indices) > 0):
+    if len(white_indices) > 0:
         gaps = np.diff(white_indices)
         gap_bins = np.where(gaps > 1)[0]
-        if (len(gap_bins) == 0):
-            ends = white_indices[len(white_indices)-1]
-            max_y_coordinate = (1-yedges[ends])/5+yedges[ends]
+        if len(gap_bins) == 0:
+            ends = white_indices[-1]
+            max_y = (1 - yedges[ends]) / 5 + yedges[ends]
         else:
-            starts = white_indices[gap_bins]
-            ends = white_indices[gap_bins + 1]
-            gaps_y = [(yedges[starts[i]+1], yedges[ends[i]]) for i in range(len(starts))]
-            max_y_coordinate = (gaps_y[len(gaps_y)-1][1] - gaps_y[len(gaps_y)-1][0])/5+gaps_y[len(gaps_y)-1][0]
-        white_indices_THRESHOLD_EXON_GENE_BODY_RATIO = max_y_coordinate
-    else:
-        data = metrics[(metrics.rna_exon_to_full_gene_body_ratio>0)&
-                  (metrics.rna_exon_to_full_gene_body_ratio<1.0)].rna_exon_to_full_gene_body_ratio.astype(float).values
-        white_indices_THRESHOLD_EXON_GENE_BODY_RATIO = threshold_multiotsu(data, classes=3)[1]
+            starts, ends = white_indices[gap_bins], white_indices[gap_bins + 1]
+            gaps_y = [(yedges[starts[i] + 1], yedges[ends[i]]) for i in range(len(starts))]
+            max_y = (gaps_y[-1][1] - gaps_y[-1][0]) / 5 + gaps_y[-1][0]
+        return round(max_y, 2)
+    
+    data = metrics[(metrics.rna_exon_to_full_gene_body_ratio > 0) & (metrics.rna_exon_to_full_gene_body_ratio < 1.0)].rna_exon_to_full_gene_body_ratio.astype(float).values
+    return round(threshold_multiotsu(data, classes=3)[1], 2)
 
-    THRESHOLD_EXON_GENE_BODY_RATIO = round(white_indices_THRESHOLD_EXON_GENE_BODY_RATIO, 2)
-
-    return THRESHOLD_EXON_GENE_BODY_RATIO
-
-######## functions for knee plot analysis
+# ==============================================================================
+# 4. KNEE PLOT ANALYSIS
+# ==============================================================================
 # Savitzky-Golay filter parameters
 _MIN_WINDOW_LENGTH = 201
 _WINDOW_DIVISOR = 5
@@ -706,7 +596,6 @@ _PEAK_PROMINENCE_FRACTION = 0.1
 
 # Minimum UMI threshold for peak detection
 _MIN_UMIS_FOR_PEAKS = 5
-
 
 def classify_umi_range(umis, end_cliff, knee):
     """
@@ -732,7 +621,6 @@ def classify_umi_range(umis, end_cliff, knee):
         return f"{end_cliff} < UMIs < {knee}"
     else:
         return f"UMIs > {knee}"
-
 
 def analyze_knee_plot(
     metrics, knee, knee_rank, end_cliff, end_cliff_rank, inflection_rank
@@ -787,7 +675,6 @@ def analyze_knee_plot(
 
     return df_ranked, df_interpolated, n_peaks, final_peak_indices
 
-
 def _rank_barcodes(metrics, end_cliff, knee):
     """
     Sort barcodes by UMI count and compute discrete differences.
@@ -820,7 +707,6 @@ def _rank_barcodes(metrics, end_cliff, knee):
     df["change_umis"] = change
 
     return df
-
 
 def _interpolate_log_uniform(df_ranked, end_cliff, knee):
     """
@@ -860,7 +746,6 @@ def _interpolate_log_uniform(df_ranked, end_cliff, knee):
     )
 
     return df_interp
-
 
 def _compute_window_size(df_interpolated, knee_rank, inflection_rank):
     """
@@ -1028,7 +913,6 @@ def _consolidate_peaks(df_interpolated, peak_indices, end_cliff_rank):
 
     return np.append(pre_cliff_peaks, strongest_post_cliff)
 
-
 def _log_knee_warnings(df_interpolated, final_peak_indices, end_cliff_rank, n_peaks):
     """
     Log warnings about knee plot quality based on detected peaks.
@@ -1051,7 +935,10 @@ def _log_knee_warnings(df_interpolated, final_peak_indices, end_cliff_rank, n_pe
 
     logger.info(f"Number of prominent transitions in knee plot: {n_peaks:,}")
 
-######## all functions for ATAC max_pct_reads_from_single_autosome
+# ==============================================================================
+# 5. ATAC SPECIFIC METRICS
+# ==============================================================================
+
 # 2D histogram parameters
 _HIST_BINS = 150
 _GAUSSIAN_SIGMA = 2
@@ -1060,10 +947,6 @@ _OTSU_THRESHOLD_INDEX = 0
 
 # Peak detection
 _PEAK_PROMINENCE_FRACTION = 0.05
-
-# Fraction-to-percent conversion
-_FRACTION_TO_PCT = 100
-
 
 def get_atac_max_autosome_threshold(metrics):
     """
@@ -1089,127 +972,31 @@ def get_atac_max_autosome_threshold(metrics):
     """
     # Convert fraction to percentage
     metrics = metrics.copy()
-    metrics["max_pct_reads_from_single_autosome"] = (
-        metrics["max_fraction_reads_from_single_autosome"] * _FRACTION_TO_PCT
-    )
+    metrics["max_pct_reads_from_single_autosome"] = metrics["max_fraction_reads_from_single_autosome"] * 100
 
-    # Step 1: Detect number of peaks in the distribution
-    n_peaks, kde_df = _guess_n_peaks(metrics)
+    filtered = metrics.loc[metrics["filter_atac_min_hqaa"].eq(True), "max_pct_reads_from_single_autosome"].astype(float)
+    _, n_peaks, kde_df = _extract_kde_peaks(np.log10(filtered))
+    logger.info(f"Number of prominent peaks in ATAC max_pct_reads_from_single_autosome: {n_peaks:,}")
 
-    # Step 2: Estimate threshold based on peak structure
-    if n_peaks == 1:
-        threshold = _threshold_single_peak(metrics, n_peaks)
-    else:
-        threshold = _threshold_multi_peak(metrics, n_peaks)
+    if n_peaks != 1:
+        return estimate_threshold(filtered, classes=n_peaks + 1), n_peaks, kde_df
 
-    return threshold, n_peaks, kde_df
-
-
-def _guess_n_peaks(metrics): # this function is reused a lot, worth merging -- to do
-    """
-    Detect the number of prominent peaks in the autosome read fraction distribution.
-
-    Parameters
-    ----------
-    metrics : pd.DataFrame
-
-    Returns
-    -------
-    tuple
-        (n_peaks, kde_df)
-    """
-    filtered = metrics.loc[
-        metrics["filter_atac_min_hqaa"].eq(True),
-        "max_pct_reads_from_single_autosome",
-    ].astype(float)
-
-    log_data = np.log10(filtered)
-
-    # Generate KDE and extract curve
-    kde_ax = sns.kdeplot(log_data)
-    x = kde_ax.lines[0].get_xdata()
-    y = kde_ax.lines[0].get_ydata()
-    plt.clf()
-
-    # Detect peaks
-    min_prominence = np.abs(y.max()) * _PEAK_PROMINENCE_FRACTION
-    peaks, _ = find_peaks(y, prominence=min_prominence)
-    n_peaks = len(peaks)
-
-    logger.info(
-        f"Number of prominent peaks in ATAC max_pct_reads_from_single_autosome: {n_peaks:,}"
-    )
-
-    kde_df = pd.DataFrame({"x": x, "density": y})
-
-    return n_peaks, kde_df
-
-
-def _threshold_single_peak(metrics, n_peaks):
-    """
-    Estimate threshold using 2D histogram segmentation for single-peak data.
-
-    Attempts log-transformed y-axis first. If that fails, tries linear y-axis.
-    Falls back to 1D Multi-Otsu if both fail.
-
-    Parameters
-    ----------
-    metrics : pd.DataFrame
-    n_peaks : int
-
-    Returns
-    -------
-    float
-        Estimated threshold (in percent).
-    """
-    filtered = metrics.loc[metrics["filter_atac_min_hqaa"].eq(True)]
-    x = np.log10(filtered["hqaa"])
-
-    # Attempt 1: Log-transformed y-axis
-    y_log = np.log10(filtered["max_pct_reads_from_single_autosome"])
-    max_y = _segment_2d_and_find_max_y(x, y_log)
-
+    subset = metrics.loc[metrics["filter_atac_min_hqaa"].eq(True)]
+    x = np.log10(subset["hqaa"])
+    
+    # Try Log-transformed first
+    max_y = _segment_2d_and_find_max_y(x, np.log10(subset["max_pct_reads_from_single_autosome"]))
     if max_y is not None:
-        return round(10**max_y)
+        return round(10**max_y), n_peaks, kde_df
 
-    # Attempt 2: Linear y-axis
-    logger.info(
-        "2D segmentation failed with log-transform; retrying without log-transform."
-    )
-    y_linear = filtered["max_pct_reads_from_single_autosome"]
-    max_y = _segment_2d_and_find_max_y(x, y_linear)
-
+    # Try Linear setup
+    logger.info("2D segmentation failed with log-transform; retrying without log-transform.")
+    max_y = _segment_2d_and_find_max_y(x, subset["max_pct_reads_from_single_autosome"])
     if max_y is not None:
-        return round(10 ** np.log10(max_y))
+        return round(max_y), n_peaks, kde_df
 
-    # Attempt 3: Fallback to 1D Multi-Otsu
-    logger.info(
-        "2D segmentation failed; falling back to 1D Multi-Otsu."
-    )
-    return _threshold_multi_peak(metrics, n_peaks)
-
-
-def _threshold_multi_peak(metrics, n_peaks):
-    """
-    Estimate threshold using 1D Multi-Otsu for multi-peak distributions.
-
-    Parameters
-    ----------
-    metrics : pd.DataFrame
-    n_peaks : int
-
-    Returns
-    -------
-    float
-        Estimated threshold (in percent).
-    """
-    filtered_data = metrics.loc[
-        metrics["filter_atac_min_hqaa"].eq(True),
-        "max_pct_reads_from_single_autosome",
-    ].astype(float)
-
-    return estimate_threshold(filtered_data, classes=n_peaks + 1)
-
+    logger.info("2D segmentation failed; falling back to 1D Multi-Otsu.")
+    return estimate_threshold(filtered, classes=n_peaks + 1), n_peaks, kde_df
 
 def _segment_2d_and_find_max_y(x, y):
     """
@@ -1229,38 +1016,22 @@ def _segment_2d_and_find_max_y(x, y):
         Maximum y-coordinate of the foreground, or None if no foreground found.
     """
     # Build 2D histogram
-    heatmap, xedges, yedges = np.histogram2d(x, y, bins=_HIST_BINS)
+    heatmap, _, yedges = np.histogram2d(x, y, bins=_HIST_BINS)
+    smooth = ski.filters.gaussian(heatmap, sigma=_GAUSSIAN_SIGMA)
+    binary_mask = smooth > threshold_multiotsu(image=smooth, classes=_OTSU_CLASSES)[_OTSU_THRESHOLD_INDEX]
 
-    # Smooth and threshold
-    smoothed = ski.filters.gaussian(heatmap, sigma=_GAUSSIAN_SIGMA)
-    otsu_thresholds = threshold_multiotsu(
-        image=smoothed, classes=_OTSU_CLASSES
-    )
-    binary_mask = smoothed > otsu_thresholds[_OTSU_THRESHOLD_INDEX]
-
-    # Remove non-background regions
     labels = ski.morphology.label(binary_mask)
-    label_counts = np.bincount(labels.ravel())
-    background_label = np.argmax(label_counts)
-    binary_mask[labels != background_label] = True
-
-    # Find the highest y-bin containing foreground (transposed view)
+    binary_mask[labels != np.argmax(np.bincount(labels.ravel()))] = True
     foreground_rows = np.argwhere(np.any(binary_mask.T, axis=1))
 
     if foreground_rows.size == 0:
         return None
-
-    # Convert row index to y-coordinate
-    max_row_index = np.max(foreground_rows)
-    n_rows = binary_mask.shape[0]
-    max_y_coordinate = (
-        yedges[0]
-        + (yedges[-1] - yedges[0]) * (max_row_index / (n_rows - 1))
-    )
-
-    return max_y_coordinate
+    return yedges[0] + (yedges[-1] - yedges[0]) * (np.max(foreground_rows) / (binary_mask.shape[0] - 1))
     
-######## functions to plot
+# ==============================================================================
+# 6. QUALITY CONTROL PLOTS
+# ==============================================================================
+
 def barcode_rank_plot(metrics, ax):
     """
     Create a barcode rank plot (knee plot) colored by filter status.
@@ -1401,16 +1172,6 @@ def rna_umis_vs_atac_hqaa_plot(metrics, ax):
     ax.set_xlabel('UMIs (RNA)')
     ax.set_ylabel('Pass filter reads (ATAC)')
     return ax
-
-
-def atac_hqaa_vs_atac_tss_enrichment_plot(metrics, ax):
-    sns.scatterplot(x='atac_hqaa', y='atac_tss_enrichment', data=metrics, ax=ax, hue='pass_all_filters', palette={True: 'red', False: 'black'}, edgecolor=None, alpha=0.02, s=3)
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.set_xlabel('Pass filter reads (ATAC)')
-    ax.set_ylabel('TSS enrichment')
-    return ax
-
 
 def barcode_rank_plot_atac(metrics, ax, hue='pass_all_filters', alpha=0.2):
     """
